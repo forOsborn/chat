@@ -1,1 +1,854 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>护理差错告知AI助手</title>
 
+  <script src="https://lf-cdn.coze.cn/obj/unpkg/flow-platform/chat-app-sdk/1.2.0-beta.20/libs/cn/index.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #f5f6f8;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    textarea,
+    input[type="text"],
+    input:not([type]),
+    [contenteditable="true"] {
+      display: none !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
+    #status-panel {
+      position: fixed;
+      top: 16px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+      user-select: none;
+    }
+
+    #stage-badge,
+    #training-timer {
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      border-radius: 999px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+    }
+
+    #stage-badge {
+      padding: 7px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1;
+    }
+
+    #training-timer {
+      padding: 8px 14px;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    #stage-tip {
+      position: fixed;
+      top: 16px;
+      left: 20px;
+      z-index: 9998;
+      background: rgba(255,255,255,0.95);
+      color: #333;
+      border: 1px solid rgba(0,0,0,0.08);
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.5;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      max-width: min(56vw, 560px);
+    }
+
+    #timer-toast {
+      position: fixed;
+      top: 96px;
+      right: 20px;
+      z-index: 9999;
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffe69c;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      max-width: 420px;
+      display: none;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    #timeout-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: rgba(0, 0, 0, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #timeout-box {
+      width: min(92vw, 860px);
+      max-height: 82vh;
+      overflow: auto;
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px 20px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.18);
+    }
+
+    #timeout-box h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      color: #222;
+      text-align: center;
+    }
+
+    #timeout-box p {
+      margin: 8px 0;
+      font-size: 15px;
+      color: #333;
+      line-height: 1.6;
+    }
+
+    #feedback-content {
+      margin-top: 14px;
+      padding: 14px;
+      background: #f8f9fb;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.75;
+      color: #222;
+      white-space: pre-wrap;
+    }
+
+    .timeout-tip {
+      font-size: 13px !important;
+      color: #666 !important;
+      text-align: center;
+    }
+
+    .timeout-actions {
+      margin-top: 18px;
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .timeout-actions button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    #close-timeout,
+    #stage-next {
+      background: #1677ff;
+      color: #fff;
+    }
+
+    #restart-training {
+      background: #f1f3f5;
+      color: #333;
+    }
+
+    body.training-timeout {
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage-tip">请先发送“开始训练”。计时从“开始训练”真正发出后开始。</div>
+
+  <div id="status-panel">
+    <div id="stage-badge">当前阶段：未开始</div>
+    <div id="training-timer">10:00</div>
+  </div>
+
+  <div id="timer-toast"></div>
+
+  <div id="timeout-overlay">
+    <div id="timeout-box">
+      <h2 id="overlay-title">提示</h2>
+      <p id="overlay-text">内容加载中...</p>
+      <div id="feedback-content">反馈内容加载中...</div>
+      <p class="timeout-tip" id="overlay-tip">请根据当前弹窗提示继续操作。</p>
+      <div class="timeout-actions">
+        <button id="close-timeout">我知道了</button>
+        <button id="stage-next" style="display:none;">进入下一阶段</button>
+        <button id="restart-training">重新开始训练</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const BACKEND_BASE = 'http://localhost:3000';
+
+    //const TEST_MODE = true;
+    const TEST_MODE = false;
+    const TEST_STAGE_MINUTES = 5;
+    const FORMAL_STAGE_MINUTES = 30;
+
+    const COZE_BOT_ID = '7612150713271320619';
+    const COZE_TOKEN = 'pat_CicAo3yhnmz4JkNE5dbByxtpeuKMRUWa0HDkzhSkhBmty4VLT5oOK9Pyyx5EtZQi';
+
+    let localSessionId = '';
+    let timerStarted = false;
+    let timerInterval = null;
+    let currentStage = 0; // 0未开始 1阶段一 2阶段二 3结束
+    let totalSeconds = 0;
+
+    let warnedStage1 = false;
+    let warnedStage2 = false;
+    let stage1Ended = false;
+    let finalEnded = false;
+    let stage1FeedbackLocked = false;
+    let finalFeedbackLocked = false;
+
+    let chatLog = [];
+    let currentStageAtSend = 0;
+
+    const STAGE_MINUTES = TEST_MODE ? TEST_STAGE_MINUTES : FORMAL_STAGE_MINUTES;
+    const TOTAL_SECONDS = STAGE_MINUTES * 60 * 2;
+    const STAGE_SECONDS = STAGE_MINUTES * 60;
+    const REMIND_SECONDS = Math.min(3 * 60, Math.max(60, Math.floor(STAGE_SECONDS * 0.2)));
+
+    totalSeconds = TOTAL_SECONDS;
+
+    const timerEl = () => document.getElementById('training-timer');
+    const toastEl = () => document.getElementById('timer-toast');
+    const overlayEl = () => document.getElementById('timeout-overlay');
+    const stageBadgeEl = () => document.getElementById('stage-badge');
+    const stageTipEl = () => document.getElementById('stage-tip');
+    const overlayTitleEl = () => document.getElementById('overlay-title');
+    const overlayTextEl = () => document.getElementById('overlay-text');
+    const overlayTipEl = () => document.getElementById('overlay-tip');
+    const feedbackContentEl = () => document.getElementById('feedback-content');
+    const stageNextBtn = () => document.getElementById('stage-next');
+    const closeBtn = () => document.getElementById('close-timeout');
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60).toString().padStart(2, '0');
+      const s = (sec % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+
+    function showToast(message, duration = 5000) {
+      const el = toastEl();
+      el.textContent = message;
+      el.style.display = 'block';
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => {
+        el.style.display = 'none';
+      }, duration);
+    }
+
+    function updateTimerUI() {
+      timerEl().textContent = formatTime(totalSeconds);
+    }
+
+    function updateStageUI() {
+      if (!timerStarted) {
+        stageBadgeEl().textContent = '当前阶段：未开始';
+        stageTipEl().textContent = `请先发送“开始训练”。当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。`;
+        return;
+      }
+
+      if (currentStage === 1) {
+        stageBadgeEl().textContent = '当前阶段：第一阶段（案例一）';
+        stageTipEl().textContent = '当前仅进行案例一训练。时间到后系统会自动生成弹窗反馈。';
+      } else if (currentStage === 2) {
+        stageBadgeEl().textContent = '当前阶段：第二阶段（案例二）';
+        stageTipEl().textContent = '当前仅进行案例二训练。时间到后系统会自动生成弹窗反馈并结束。';
+      } else if (currentStage === 3) {
+        stageBadgeEl().textContent = '当前阶段：训练已结束';
+        stageTipEl().textContent = '训练已结束，请查看自动反馈结果。';
+      }
+    }
+
+    function openOverlay({ title, text, tip, feedback = '', showNext = false, showRestart = true, lock = true }) {
+      if (lock) document.body.classList.add('training-timeout');
+
+      overlayTitleEl().textContent = title;
+      overlayTextEl().textContent = text;
+      overlayTipEl().textContent = tip;
+      feedbackContentEl().textContent = feedback || '暂无反馈内容';
+
+      stageNextBtn().style.display = showNext ? 'inline-block' : 'none';
+      closeBtn().style.display = showNext ? 'none' : 'inline-block';
+      document.getElementById('restart-training').style.display = showRestart ? 'inline-block' : 'none';
+
+      overlayEl().style.display = 'flex';
+    }
+
+    function closeOverlay(unlock = true) {
+      overlayEl().style.display = 'none';
+      if (unlock) {
+        document.body.classList.remove('training-timeout');
+      }
+    }
+
+    function stopTimer() {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    }
+
+    function pushChatLog(role, content, stage) {
+      const text = String(content || '').trim();
+      if (!text) return;
+      chatLog.push({
+        role,
+        content: text,
+        stage,
+        ts: Date.now()
+      });
+    }
+
+    function normalizeText(text) {
+      return String(text || '')
+        .replace(/\r/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    function getStageTranscript(stage) {
+      return chatLog
+        .filter(item => item.stage === stage && item.content)
+        .map(item => `${item.role === 'user' ? '学员' : '患者/系统'}：${item.content}`)
+        .join('\n');
+    }
+
+    function getAllTranscript() {
+      return chatLog
+        .filter(item => item.content)
+        .map(item => `${item.role === 'user' ? '学员' : '患者/系统'}：${item.content}`)
+        .join('\n');
+    }
+
+    function resetLocalState() {
+      stopTimer();
+
+      localSessionId = '';
+      timerStarted = false;
+      currentStage = 0;
+      totalSeconds = TOTAL_SECONDS;
+
+      warnedStage1 = false;
+      warnedStage2 = false;
+      stage1Ended = false;
+      finalEnded = false;
+      stage1FeedbackLocked = false;
+      finalFeedbackLocked = false;
+
+      chatLog = [];
+      currentStageAtSend = 0;
+
+      updateTimerUI();
+      updateStageUI();
+
+      const toast = toastEl();
+      toast.style.display = 'none';
+      clearTimeout(toast._timer);
+
+      closeOverlay(true);
+    }
+
+    function hardResetTrainingStateOnly() {
+      stopTimer();
+
+      localSessionId = '';
+      timerStarted = false;
+      currentStage = 0;
+      totalSeconds = TOTAL_SECONDS;
+
+      warnedStage1 = false;
+      warnedStage2 = false;
+      stage1Ended = false;
+      finalEnded = false;
+      stage1FeedbackLocked = false;
+      finalFeedbackLocked = false;
+
+      chatLog = [];
+      currentStageAtSend = 0;
+
+      updateTimerUI();
+      updateStageUI();
+
+      const toast = toastEl();
+      toast.style.display = 'none';
+      clearTimeout(toast._timer);
+
+      closeOverlay(true);
+      showToast('检测到已新开聊天，本轮计时与反馈记录已重置。', 3000);
+    }
+
+    function getCurrentStageRemaining() {
+      if (currentStage === 1) return totalSeconds - STAGE_SECONDS;
+      if (currentStage === 2) return totalSeconds;
+      return 0;
+    }
+
+    function isStartTrainingMessage(content) {
+      if (!content || typeof content !== 'string') return false;
+      const text = content.trim();
+      return text === '开始训练' || text === '开始训练。';
+    }
+
+    async function postJson(path, body) {
+      const res = await fetch(`${BACKEND_BASE}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `请求失败: ${path}`);
+      }
+
+      return data;
+    }
+
+    async function createTrainingSessionIfNeeded() {
+      if (localSessionId) return;
+      const data = await postJson('/api/session/new', {});
+      localSessionId = data.localSessionId;
+      console.log('已创建本地训练会话', { localSessionId });
+    }
+
+    async function markTrainingStarted() {
+      if (!localSessionId) return;
+      await postJson('/api/session/start', {
+        localSessionId
+      });
+    }
+
+    function clearSdkHistoryOnPageLoad() {
+      try {
+        const removeKeys = [];
+
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (!key) continue;
+          const lower = key.toLowerCase();
+          if (
+            lower.includes('coze') ||
+            lower.includes('chat') ||
+            lower.includes('conversation') ||
+            lower.includes('message')
+          ) {
+            removeKeys.push(key);
+          }
+        }
+
+        removeKeys.forEach(key => localStorage.removeItem(key));
+
+        const removeSessionKeys = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          if (!key) continue;
+          const lower = key.toLowerCase();
+          if (
+            lower.includes('coze') ||
+            lower.includes('chat') ||
+            lower.includes('conversation') ||
+            lower.includes('message')
+          ) {
+            removeSessionKeys.push(key);
+          }
+        }
+
+        removeSessionKeys.forEach(key => sessionStorage.removeItem(key));
+      } catch (e) {
+        console.warn('清理 SDK 历史缓存失败:', e);
+      }
+    }
+
+    function clickSdkAddChatButton() {
+      const buttons = Array.from(document.querySelectorAll('button'));
+
+      const target = buttons.find(btn => {
+        const text = (btn.textContent || '').trim().toLowerCase();
+        const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
+        const title = (btn.getAttribute('title') || '').trim().toLowerCase();
+
+        return (
+          text.includes('add chat') ||
+          text.includes('new chat') ||
+          text.includes('clear context') ||
+          aria.includes('add chat') ||
+          aria.includes('new chat') ||
+          aria.includes('clear context') ||
+          title.includes('add chat') ||
+          title.includes('new chat') ||
+          title.includes('clear context')
+        );
+      });
+
+      if (target) {
+        target.click();
+        return true;
+      }
+      return false;
+    }
+
+    // 页面初始化前先清一次历史缓存
+    clearSdkHistoryOnPageLoad();
+
+    new CozeWebSDK.WebChatClient({
+      config: {
+        bot_id: COZE_BOT_ID
+      },
+      componentProps: {
+        title: '护理差错告知AI助手'
+      },
+      auth: {
+        type: 'token',
+        token: COZE_TOKEN,
+        onRefreshToken: async function () {
+          return COZE_TOKEN;
+        }
+      }
+    });
+
+    function applyVoiceOnlyUI() {
+      document.querySelectorAll(
+        'textarea, input[type="text"], input:not([type]), [contenteditable="true"]'
+      ).forEach(el => {
+        el.style.display = 'none';
+        el.style.visibility = 'hidden';
+        el.style.pointerEvents = 'none';
+      });
+
+      const iconButtons = document.querySelectorAll(
+        'button.coze-chat-sdk-semi-button-with-icon-only'
+      );
+      if (iconButtons.length > 7) {
+        iconButtons[7].style.display = 'none';
+      }
+
+      Array.from(document.querySelectorAll('*')).forEach(el => {
+        const txt = (el.textContent || '').trim();
+        if (
+          el.children.length === 0 &&
+          (txt === 'Press here or the space key to speak' || txt === 'Click to activate input')
+        ) {
+          el.textContent = '按住此处说话';
+          el.style.position = 'relative';
+          el.style.top = '-3px';
+          el.style.whiteSpace = 'nowrap';
+        }
+      });
+    }
+
+    setTimeout(applyVoiceOnlyUI, 1200);
+    setTimeout(applyVoiceOnlyUI, 2500);
+    setTimeout(applyVoiceOnlyUI, 4000);
+    setTimeout(applyVoiceOnlyUI, 6000);
+
+    const observer = new MutationObserver(() => {
+      applyVoiceOnlyUI();
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    // 页面打开后再自动尝试点一次 Add chat / New chat
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        const clicked = clickSdkAddChatButton();
+        if (clicked) {
+          showToast('已自动清除上次聊天记录。', 2200);
+        }
+      }, 1400);
+    });
+
+    (function installAddChatResetWatcher() {
+      let lastContextClearedCount = 0;
+
+      function checkContextCleared() {
+        const nodes = Array.from(document.querySelectorAll('*')).filter(el => {
+          if (el.children.length > 0) return false;
+          const txt = (el.textContent || '').trim();
+          return txt === 'Context cleared';
+        });
+
+        if (nodes.length > lastContextClearedCount) {
+          lastContextClearedCount = nodes.length;
+          hardResetTrainingStateOnly();
+        }
+      }
+
+      const mo = new MutationObserver(() => {
+        checkContextCleared();
+      });
+
+      mo.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+
+      setTimeout(checkContextCleared, 1000);
+    })();
+
+    function startTimer() {
+      if (timerStarted) return;
+
+      timerStarted = true;
+      currentStage = 1;
+      updateTimerUI();
+      updateStageUI();
+
+      timerInterval = setInterval(tick, 1000);
+    }
+
+    async function handleStage1End() {
+      if (stage1FeedbackLocked) return;
+      stage1FeedbackLocked = true;
+      stage1Ended = true;
+
+      stopTimer();
+      showToast('第一阶段已到时，正在整理对话并生成反馈，请稍候...', 5000);
+
+      try {
+        const transcript = getStageTranscript(1);
+
+        const data = await postJson('/api/session/stage1-timeup', {
+          localSessionId,
+          transcript
+        });
+
+        currentStage = 2;
+
+        openOverlay({
+          title: '第一阶段反馈',
+          text: '第一阶段已结束，下面是您的最新反馈。现在即将开始下一阶段的训练，如果您已做好准备，请输入“进入第二阶段”',
+          tip: '关闭弹窗后，请先在聊天中输入“进入第二阶段”，再开始第二阶段训练。',
+          feedback: data.answer || '未获取到反馈文本',
+          showNext: true,
+          showRestart: true,
+          lock: true
+        });
+      } catch (err) {
+        openOverlay({
+          title: '第一阶段自动反馈失败',
+          text: '后端没有成功拿到第一阶段反馈，请检查后端配置。',
+          tip: err.message || '未知错误',
+          feedback: err.stack || err.message || '未知错误',
+          showNext: true,
+          showRestart: true,
+          lock: true
+        });
+      }
+    }
+
+    async function handleFinalEnd() {
+      if (finalFeedbackLocked) return;
+      finalFeedbackLocked = true;
+      finalEnded = true;
+      currentStage = 3;
+
+      stopTimer();
+      totalSeconds = 0;
+      updateTimerUI();
+      updateStageUI();
+
+      showToast('训练已结束，正在整理全程对话并生成最终反馈，请稍候...', 5000);
+
+      try {
+        const transcript = getAllTranscript();
+
+        const data = await postJson('/api/session/final-timeup', {
+          localSessionId,
+          transcript
+        });
+
+        openOverlay({
+          title: '训练结束反馈',
+          text: '本次训练已结束，系统已生成最终反馈报告。',
+          tip: '反馈显示在弹窗中，不要求显示在聊天气泡里。',
+          feedback: data.answer || '未获取到反馈文本',
+          showNext: false,
+          showRestart: true,
+          lock: true
+        });
+      } catch (err) {
+        openOverlay({
+          title: '最终自动反馈失败',
+          text: '后端没有成功拿到最终反馈，请检查后端日志。',
+          tip: err.message || '未知错误',
+          feedback: err.stack || err.message || '未知错误',
+          showNext: false,
+          showRestart: true,
+          lock: true
+        });
+      }
+    }
+
+    function tick() {
+      totalSeconds--;
+      if (totalSeconds < 0) totalSeconds = 0;
+
+      if (totalSeconds > STAGE_SECONDS) currentStage = 1;
+      else if (totalSeconds > 0) currentStage = 2;
+      else currentStage = 3;
+
+      const stageRemaining = getCurrentStageRemaining();
+
+      if (currentStage === 1 && stageRemaining <= REMIND_SECONDS && !warnedStage1) {
+        warnedStage1 = true;
+        showToast(`第一阶段还剩 ${Math.ceil(REMIND_SECONDS / 60)} 分钟，请准备结束当前轮对话。`, 4500);
+      }
+
+      if (currentStage === 2 && stageRemaining <= REMIND_SECONDS && !warnedStage2) {
+        warnedStage2 = true;
+        showToast(`第二阶段还剩 ${Math.ceil(REMIND_SECONDS / 60)} 分钟，请准备结束当前轮对话。`, 4500);
+      }
+
+      updateTimerUI();
+      updateStageUI();
+
+      if (!stage1Ended && totalSeconds === STAGE_SECONDS) {
+        handleStage1End();
+        return;
+      }
+
+      if (!finalEnded && totalSeconds === 0) {
+        handleFinalEnd();
+      }
+    }
+
+    updateTimerUI();
+    updateStageUI();
+
+    (function installStartTrainingAndLogHook() {
+      const oldFetch = window.fetch;
+
+      window.fetch = function (...args) {
+        try {
+          const [url, options] = args;
+          const urlStr = typeof url === 'string' ? url : (url?.url || '');
+
+          if (
+            urlStr.includes('/v3/chat') &&
+            options &&
+            typeof options.body === 'string'
+          ) {
+            const bodyObj = JSON.parse(options.body);
+            const msgs = bodyObj?.additional_messages || [];
+            const lastMsg = msgs[msgs.length - 1] || {};
+            const userContent = lastMsg?.content || '';
+
+            currentStageAtSend = currentStage || 1;
+
+            if (userContent.trim()) {
+              pushChatLog('user', normalizeText(userContent), currentStageAtSend);
+            }
+
+            if (isStartTrainingMessage(userContent) && !timerStarted) {
+              Promise.resolve()
+                .then(() => createTrainingSessionIfNeeded())
+                .then(() => markTrainingStarted())
+                .then(() => {
+                  startTimer();
+                  showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。`, 4500);
+                })
+                .catch(err => {
+                  console.error('开始训练识别失败:', err);
+                });
+            }
+          }
+        } catch (err) {
+          console.error('开始训练识别/记录失败:', err);
+        }
+
+        const responsePromise = oldFetch.apply(this, args);
+
+        responsePromise.then(async (response) => {
+          try {
+            const [url] = args;
+            const urlStr = typeof url === 'string' ? url : (url?.url || '');
+
+            if (!urlStr.includes('/v3/chat')) return;
+
+            const cloned = response.clone();
+            const text = await cloned.text();
+
+            const matches = [...text.matchAll(/"content"\s*:\s*"([^"]*)"/g)];
+            if (matches.length > 0) {
+              const last = matches[matches.length - 1][1]
+                .replace(/\\"/g, '"')
+                .replace(/\\n/g, '\n')
+                .trim();
+
+              if (last) {
+                pushChatLog('assistant', normalizeText(last), currentStageAtSend);
+              }
+            }
+          } catch (e) {
+            console.warn('记录 assistant 回复失败:', e);
+          }
+        });
+
+        return responsePromise;
+      };
+    })();
+
+    document.getElementById('close-timeout')?.addEventListener('click', () => {
+      closeOverlay(true);
+    });
+
+    document.getElementById('stage-next')?.addEventListener('click', () => {
+      closeOverlay(true);
+      currentStage = 2;
+      updateStageUI();
+
+      if (!finalEnded && !timerInterval && totalSeconds > 0) {
+        timerInterval = setInterval(tick, 1000);
+      }
+
+      showToast('已切换到第二阶段。请在聊天中输入“进入第二阶段”，然后继续训练。', 4000);
+    });
+
+    document.getElementById('restart-training')?.addEventListener('click', async () => {
+      try {
+        if (localSessionId) {
+          await postJson('/api/session/reset', { localSessionId });
+        }
+      } catch (err) {
+        console.warn('reset session 失败:', err);
+      }
+
+      resetLocalState();
+      location.reload();
+    });
+  </script>
+</body>
+</html>
