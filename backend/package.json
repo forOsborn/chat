@@ -1,1 +1,16 @@
-
+{
+  "name": "nursing-training-backend",
+  "version": "1.0.0",
+  "description": "护理差错告知训练助手后端",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
