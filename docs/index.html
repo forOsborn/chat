@@ -289,6 +289,7 @@
     let playedAudioMessageKeys = new Set();
     let pendingAudioMessageKey = '';
     let lastAudioPlayAt = 0;
+    let hasSentMessageInThisPage = false;
 
     const STAGE_MINUTES = TEST_MODE ? TEST_STAGE_MINUTES : FORMAL_STAGE_MINUTES;
     const TOTAL_SECONDS = STAGE_MINUTES * 60 * 2;
@@ -593,6 +594,64 @@
     }
 
     // 页面初始化前先清一次历史缓存
+    function getChatMessageContainers() {
+      const selectors = [
+        '[class*="message"]',
+        '[data-testid*="message"]',
+        '[class*="bubble"]'
+      ].join(',');
+
+      return Array.from(document.querySelectorAll(selectors)).filter(el => {
+        if (el.closest('#status-panel, #timer-toast, #timeout-overlay')) return false;
+        if (el.querySelector('textarea, input, [contenteditable="true"]')) return false;
+
+        const text = (el.textContent || '').trim();
+        if (!text || text.length < 2) return false;
+        if (text.includes('Powered by coze')) return false;
+        return true;
+      });
+    }
+
+    function hasVisibleChatHistory() {
+      return getChatMessageContainers().some(el => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      });
+    }
+
+    function hideRestoredCloudHistory() {
+      if (hasSentMessageInThisPage) return;
+
+      getChatMessageContainers().forEach(el => {
+        const container =
+          el.closest('[class*="message"], [data-testid*="message"], [class*="bubble"]') ||
+          el;
+        container.dataset.hiddenRestoredHistory = 'true';
+        container.style.display = 'none';
+        container.style.visibility = 'hidden';
+      });
+    }
+
+    function forceFreshSdkConversation() {
+      clearSdkHistoryOnPageLoad();
+      hideRestoredCloudHistory();
+
+      setTimeout(() => {
+        hideRestoredCloudHistory();
+        if (!hasVisibleChatHistory()) return;
+        const clicked = clickSdkAddChatButton();
+        if (clicked) {
+          hardResetTrainingStateOnly();
+        }
+      }, 1800);
+
+      setTimeout(() => {
+        hideRestoredCloudHistory();
+        if (!hasVisibleChatHistory()) return;
+        clickSdkAddChatButton();
+      }, 3600);
+    }
+
     clearSdkHistoryOnPageLoad();
 
     new CozeWebSDK.WebChatClient({
@@ -606,6 +665,13 @@
       },
       componentProps: {
         title: '护理差错告知AI助手'
+      },
+      ui: {
+        chatBot: {
+          isNeedClearContext: true,
+          isNeedClearMessage: true,
+          isNeedAddNewConversation: true
+        }
       },
       auth: {
         type: 'token',
@@ -977,6 +1043,7 @@
 
     const observer = new MutationObserver(() => {
       applyVoiceOnlyUI();
+      hideRestoredCloudHistory();
       autoPlayLatestAudio();  // 新增自动播放
     });
 
@@ -987,6 +1054,8 @@
 
     // 页面打开后再自动尝试点一次 Add chat / New chat
     window.addEventListener('load', () => {
+      forceFreshSdkConversation();
+
       setTimeout(() => {
         const clicked = clickSdkAddChatButton();
         if (clicked) {
@@ -1180,6 +1249,12 @@
             currentStageAtSend = currentStage || 1;
 
             if (userContent.trim()) {
+              hasSentMessageInThisPage = true;
+              document
+                .querySelectorAll('[data-hidden-restored-history="true"]')
+                .forEach(el => {
+                  el.remove();
+                });
               pushChatLog('user', normalizeText(userContent), currentStageAtSend);
             }
 
