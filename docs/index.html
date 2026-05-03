@@ -250,8 +250,8 @@
   <button id="voice-unlock" type="button">点击开启语音自动播放</button>
 
   <script>
-    //const BACKEND_BASE = 'https://clever-trust-production.up.railway.app';
-    const BACKEND_BASE = 'http://localhost:3000';
+    const BACKEND_BASE = 'https://clever-trust-production.up.railway.app';
+    //const BACKEND_BASE = 'http://localhost:3000';
 
     //const TEST_MODE = true;
     const TEST_MODE = false;
@@ -515,37 +515,21 @@
     }
 
     function createIsolatedCozeUserId() {
-      const storageKey = 'nursing_training_isolated_user_id';
-      try {
-        const existing = sessionStorage.getItem(storageKey);
-        if (existing) return existing;
-      } catch (e) {
-        // Continue with an in-memory ID when sessionStorage is unavailable.
-      }
-
       const randomPart = (
         window.crypto?.randomUUID?.() ||
         `${Date.now()}_${Math.random().toString(36).slice(2)}`
       ).replace(/[^a-zA-Z0-9_-]/g, '');
 
-      const id = `nursing_training_${randomPart}`.slice(0, 64);
-      try {
-        sessionStorage.setItem(storageKey, id);
-      } catch (e) {
-        // Ignore storage failures.
-      }
-      return id;
+      return `nursing_training_${randomPart}`.slice(0, 64);
     }
 
     function clearSdkHistoryOnPageLoad() {
       try {
-        const keepKeys = new Set(['nursing_training_isolated_user_id']);
         const removeKeys = [];
 
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
           if (!key) continue;
-          if (keepKeys.has(key)) continue;
           const lower = key.toLowerCase();
           if (
             lower.includes('coze') ||
@@ -563,7 +547,6 @@
         for (let i = 0; i < sessionStorage.length; i++) {
           const key = sessionStorage.key(i);
           if (!key) continue;
-          if (keepKeys.has(key)) continue;
           const lower = key.toLowerCase();
           if (
             lower.includes('coze') ||
@@ -611,33 +594,6 @@
 
     // 页面初始化前先清一次历史缓存
     clearSdkHistoryOnPageLoad();
-
-    function hasVisibleChatHistory() {
-      const messageLikeNodes = Array.from(document.querySelectorAll('[class*="message"], [class*="bubble"]')).filter(el => {
-        if (el.closest('#status-panel, #timer-toast, #timeout-overlay')) return false;
-        const text = (el.textContent || '').trim();
-        return text && text.length >= 2;
-      });
-
-      return messageLikeNodes.length > 0;
-    }
-
-    function forceFreshSdkConversation() {
-      clearSdkHistoryOnPageLoad();
-
-      setTimeout(() => {
-        if (!hasVisibleChatHistory()) return;
-        const clicked = clickSdkAddChatButton();
-        if (clicked) {
-          hardResetTrainingStateOnly();
-        }
-      }, 1800);
-
-      setTimeout(() => {
-        if (!hasVisibleChatHistory()) return;
-        clickSdkAddChatButton();
-      }, 3600);
-    }
 
     new CozeWebSDK.WebChatClient({
       config: {
@@ -1031,8 +987,6 @@
 
     // 页面打开后再自动尝试点一次 Add chat / New chat
     window.addEventListener('load', () => {
-      forceFreshSdkConversation();
-
       setTimeout(() => {
         const clicked = clickSdkAddChatButton();
         if (clicked) {
