@@ -250,8 +250,8 @@
   <button id="voice-unlock" type="button">点击开启语音自动播放</button>
 
   <script>
-    //const BACKEND_BASE = 'https://clever-trust-production.up.railway.app';
-    const BACKEND_BASE = 'http://localhost:3000';
+    const BACKEND_BASE = 'https://clever-trust-production.up.railway.app';
+    //const BACKEND_BASE = 'http://localhost:3000';
 
     //const TEST_MODE = true;
     const TEST_MODE = false;
@@ -598,11 +598,11 @@
     new CozeWebSDK.WebChatClient({
       config: {
         bot_id: COZE_BOT_ID,
-        isIframe: false,
-        userInfo: {
-          id: COZE_USER_ID,
-          nickname: 'training_user'
-        }
+        isIframe: false
+      },
+      userInfo: {
+        id: COZE_USER_ID,
+        nickname: 'training_user'
       },
       componentProps: {
         title: '护理差错告知AI助手'
