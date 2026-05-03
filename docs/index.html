@@ -180,6 +180,47 @@
     body.training-timeout {
       overflow: hidden;
     }
+
+    #voice-unlock {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      z-index: 10001;
+      display: none !important;
+      align-items: center;
+      gap: 10px;
+      border: none;
+      border-radius: 999px;
+      padding: 11px 18px;
+      background: #1677ff;
+      color: #fff;
+      box-shadow: 0 8px 24px rgba(22, 119, 255, 0.28);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #voice-unlock.is-hidden {
+      display: none;
+    }
+
+    [class*="thinking" i],
+    [class*="think" i],
+    [class*="reasoning" i],
+    [class*="reason" i],
+    [class*="thought" i],
+    [data-testid*="thinking" i],
+    [data-testid*="reasoning" i],
+    [data-testid*="thought" i] {
+      display: none !important;
+      visibility: hidden !important;
+    }
+
+    .e338c53da3cea5f5ba29 {
+      display: none !important;
+      visibility: hidden !important;
+    }
   </style>
 </head>
 <body>
@@ -206,8 +247,12 @@
     </div>
   </div>
 
+  <button id="voice-unlock" type="button">点击开启语音自动播放</button>
+
   <script>
     const BACKEND_BASE = 'https://clever-trust-production.up.railway.app';
+    //const BACKEND_BASE = 'http://localhost:3000';
+
     //const TEST_MODE = true;
     const TEST_MODE = false;
     const TEST_STAGE_MINUTES = 5;
@@ -215,6 +260,7 @@
 
     const COZE_BOT_ID = '7612150713271320619';
     const COZE_TOKEN = 'pat_CicAo3yhnmz4JkNE5dbByxtpeuKMRUWa0HDkzhSkhBmty4VLT5oOK9Pyyx5EtZQi';
+    const COZE_USER_ID = createIsolatedCozeUserId();
 
     let localSessionId = '';
     let timerStarted = false;
@@ -231,6 +277,18 @@
 
     let chatLog = [];
     let currentStageAtSend = 0;
+    let voiceAutoplayUnlocked = false;
+    let audioUnlockContext = null;
+    let autoPlayRetryTimer = null;
+    let liveSpeechMessage = null;
+    let liveSpeechText = '';
+    let liveSpeechSpokenLength = 0;
+    let liveSpeechQueue = [];
+    let liveSpeechSpeaking = false;
+    let liveSpeechFlushTimer = null;
+    let playedAudioMessageKeys = new Set();
+    let pendingAudioMessageKey = '';
+    let lastAudioPlayAt = 0;
 
     const STAGE_MINUTES = TEST_MODE ? TEST_STAGE_MINUTES : FORMAL_STAGE_MINUTES;
     const TOTAL_SECONDS = STAGE_MINUTES * 60 * 2;
@@ -368,6 +426,9 @@
 
       chatLog = [];
       currentStageAtSend = 0;
+      playedAudioMessageKeys.clear();
+      pendingAudioMessageKey = '';
+      lastAudioPlayAt = 0;
 
       updateTimerUI();
       updateStageUI();
@@ -396,6 +457,9 @@
 
       chatLog = [];
       currentStageAtSend = 0;
+      playedAudioMessageKeys.clear();
+      pendingAudioMessageKey = '';
+      lastAudioPlayAt = 0;
 
       updateTimerUI();
       updateStageUI();
@@ -448,6 +512,15 @@
       await postJson('/api/session/start', {
         localSessionId
       });
+    }
+
+    function createIsolatedCozeUserId() {
+      const randomPart = (
+        window.crypto?.randomUUID?.() ||
+        `${Date.now()}_${Math.random().toString(36).slice(2)}`
+      ).replace(/[^a-zA-Z0-9_-]/g, '');
+
+      return `nursing_training_${randomPart}`.slice(0, 64);
     }
 
     function clearSdkHistoryOnPageLoad() {
@@ -524,7 +597,12 @@
 
     new CozeWebSDK.WebChatClient({
       config: {
-        bot_id: COZE_BOT_ID
+        bot_id: COZE_BOT_ID,
+        isIframe: false,
+        userInfo: {
+          id: COZE_USER_ID,
+          nickname: 'training_user'
+        }
       },
       componentProps: {
         title: '护理差错告知AI助手'
@@ -538,7 +616,174 @@
       }
     });
 
+    function voiceUnlockEl() {
+      return document.getElementById('voice-unlock');
+    }
+
+    function setVoiceUnlockVisible(visible) {
+      const el = voiceUnlockEl();
+      if (!el) return;
+      el.classList.add('is-hidden');
+    }
+
+    async function unlockVoiceAutoplay(event) {
+      if (event && event.isTrusted === false) return;
+
+      voiceAutoplayUnlocked = true;
+      setVoiceUnlockVisible(false);
+
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          audioUnlockContext = audioUnlockContext || new AudioCtx();
+          if (audioUnlockContext.state !== 'running') {
+            await audioUnlockContext.resume();
+          }
+        }
+      } catch (err) {
+        console.warn('音频上下文解锁失败:', err);
+      }
+
+      try {
+      } catch (err) {
+        voiceAutoplayUnlocked = false;
+        setVoiceUnlockVisible(true);
+        showToast('请在浏览器地址栏左侧，为当前网页允许麦克风权限。', 5000);
+        console.warn('麦克风权限申请失败:', err);
+        return;
+      }
+
+      scheduleAutoPlayLatestAudio(80);
+    }
+
+    function installVoiceAutoplayUnlock() {
+      setVoiceUnlockVisible(true);
+
+      voiceUnlockEl()?.addEventListener('click', unlockVoiceAutoplay);
+
+      ['pointerdown', 'keydown', 'touchstart'].forEach(type => {
+        window.addEventListener(type, unlockVoiceAutoplay, {
+          capture: true,
+          passive: true
+        });
+      });
+    }
+
+    function allowSdkIframeAutoplay() {
+      document.querySelectorAll('iframe').forEach(frame => {
+        const src = frame.getAttribute('src') || '';
+        const cls = frame.className || '';
+        if (!src.includes('coze') && !String(cls).includes('coze')) return;
+
+        const allow = frame.getAttribute('allow') || '';
+        const needed = ['autoplay', 'microphone'];
+        const nextAllow = needed.reduce((value, item) => {
+          return value.includes(item) ? value : `${value}; ${item}`;
+        }, allow).replace(/^;\s*/, '');
+
+        frame.setAttribute('allow', nextAllow);
+      });
+    }
+
+    function stripThinkingText(text) {
+      return String(text || '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+        .replace(/思考过程[:：][\s\S]*?(?=(最终回答|回复[:：]|回答[:：]|$))/g, '')
+        .replace(/思考[:：][\s\S]*?(?=(最终回答|回复[:：]|回答[:：]|$))/g, '')
+        .replace(/Thought process[:：][\s\S]*?(?=(Final answer|Answer[:：]|$))/gi, '')
+        .replace(/Thinking[:：][\s\S]*?(?=(Final answer|Answer[:：]|$))/gi, '')
+        .trim();
+    }
+
+    function hideThinkingProcessUI() {
+      document.querySelectorAll('.e338c53da3cea5f5ba29').forEach(el => {
+        el.style.display = 'none';
+        el.style.visibility = 'hidden';
+      });
+
+      const hiddenMarkers = [
+        '思考过程',
+        '思考中',
+        '已深度思考',
+        '深度思考',
+        'Thought process',
+        'Thinking',
+        'Reasoning'
+      ];
+
+      Array.from(document.querySelectorAll('*')).forEach(el => {
+        if (el.closest('#status-panel, #timer-toast, #timeout-overlay')) return;
+
+        const attrText = [
+          el.className,
+          el.getAttribute?.('aria-label'),
+          el.getAttribute?.('title'),
+          el.getAttribute?.('data-testid')
+        ].join(' ').toLowerCase();
+
+        if (/(thinking|think|reasoning|thought|chain-of-thought|cot)/.test(attrText)) {
+          el.style.display = 'none';
+          el.style.visibility = 'hidden';
+          return;
+        }
+
+        const text = (el.textContent || '').trim();
+        if (!text) return;
+
+        const internalThoughtMarkers = [
+          '用户现在输入',
+          '按照之前的规则',
+          'recall slice',
+          '训练标识',
+          '等下检查',
+          '就输出这个',
+          '首先先把那个固定的开头',
+          '对，就这么来',
+          '组织内容'
+        ];
+        const directSpanCount = Array.from(el.children).filter(child => child.tagName === 'SPAN').length;
+        const matchedInternalMarkers = internalThoughtMarkers.filter(marker => text.includes(marker)).length;
+        if (directSpanCount >= 2 && matchedInternalMarkers >= 2) {
+          el.style.display = 'none';
+          el.style.visibility = 'hidden';
+          return;
+        }
+
+        const isMarkerOnly = hiddenMarkers.some(marker => text === marker || text.startsWith(`${marker}：`) || text.startsWith(`${marker}:`));
+        if (!isMarkerOnly) return;
+
+        const target =
+          el.closest('details, [class*="collapse"], [class*="panel"], [class*="card"], [class*="reason"], [class*="think"]') ||
+          el.parentElement;
+
+        if (target && !target.matches('body')) {
+          target.style.display = 'none';
+          target.style.visibility = 'hidden';
+        }
+      });
+
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const textNodes = [];
+      while (walker.nextNode()) {
+        textNodes.push(walker.currentNode);
+      }
+
+      textNodes.forEach(node => {
+        const parent = node.parentElement;
+        if (!parent || parent.closest('#status-panel, #timer-toast, #timeout-overlay')) return;
+        const cleaned = stripThinkingText(node.nodeValue);
+        if (cleaned !== String(node.nodeValue || '').trim()) {
+          node.nodeValue = cleaned ? `${cleaned} ` : '';
+        }
+      });
+    }
+
+    installVoiceAutoplayUnlock();
+
     function applyVoiceOnlyUI() {
+      hideThinkingProcessUI();
+
       document.querySelectorAll(
         'textarea, input[type="text"], input:not([type]), [contenteditable="true"]'
       ).forEach(el => {
@@ -567,14 +812,172 @@
         }
       });
     }
-
+    
     setTimeout(applyVoiceOnlyUI, 1200);
     setTimeout(applyVoiceOnlyUI, 2500);
     setTimeout(applyVoiceOnlyUI, 4000);
     setTimeout(applyVoiceOnlyUI, 6000);
 
+    function autoPlayLatestAudio() {
+      // 只在训练开始后执行（避免未开始前误触）
+      if (!timerStarted) return;
+
+      // 获取所有 icon-only 按钮
+      const allBtns = document.querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only');
+      
+      // 筛选出位于消息气泡内、且尚未自动播放过的按钮
+      const playBtns = Array.from(allBtns).filter(btn => {
+        // 已经在之前的循环中点击过，跳过
+        if (btn.dataset.autoPlayed === 'true') return false;
+        // 确认它在消息区域内（防止点到输入框的按钮）
+        return btn.closest('[class*="message"]') || btn.closest('[class*="chat"]');
+      });
+
+      if (playBtns.length === 0) return;
+
+      // 取最后一个（即最新消息中的按钮）
+      const latestBtn = playBtns[playBtns.length - 1];
+      latestBtn.dataset.autoPlayed = 'true';
+
+      // 延迟 200ms 确保音频元素加载完毕
+      setTimeout(() => {
+        try {
+          latestBtn.click();
+        } catch (e) {
+          // 忽略可能的错误（如按钮被移除）
+        }
+      }, 200);
+    }
+
+    function isLikelyAudioPlayButton(btn) {
+      const messageContainer = getMessageContainer(btn);
+      if (!messageContainer || messageContainer.dataset.audioAutoPlayed === 'true') return false;
+
+      const text = [
+        btn.textContent,
+        btn.getAttribute('aria-label'),
+        btn.getAttribute('title')
+      ].join(' ').toLowerCase();
+
+      const denyWords = [
+        'send', 'mic', 'microphone', 'input', 'add chat', 'new chat',
+        'clear context', 'close', 'more', 'copy', '发送', '麦克风', '输入',
+        '新建', '清除', '关闭', '更多', '复制'
+      ];
+      if (denyWords.some(word => text.includes(word))) return false;
+
+      const allowWords = [
+        'play', 'listen', 'read aloud', 'audio', 'speaker', 'voice',
+        '播放', '朗读', '收听', '语音', '声音'
+      ];
+      if (allowWords.some(word => text.includes(word))) return true;
+
+      return Boolean(!btn.closest('form') && !btn.closest('[class*="input"]'));
+    }
+
+    function getMessageContainer(btn) {
+      return btn.closest('[class*="message"], [data-testid*="message"], [class*="bubble"]');
+    }
+
+    function pickLatestAssistantAudioButton(playBtns) {
+      const messages = [];
+      playBtns.forEach(btn => {
+        const message = getMessageContainer(btn);
+        if (message && messages[messages.length - 1] !== message) {
+          messages.push(message);
+        }
+      });
+
+      const latestMessage = messages[messages.length - 1];
+      if (!latestMessage) return null;
+
+      const messageButtons = Array.from(
+        latestMessage.querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only')
+      ).filter(btn => isLikelyAudioPlayButton(btn));
+
+      return messageButtons[0] || null;
+    }
+
+    function buildAudioMessageKey(message) {
+      const text = String(message?.innerText || message?.textContent || '')
+        .replace(/\s+/g, ' ')
+        .replace(/Powered by coze.*$/i, '')
+        .trim();
+
+      if (text.length < 16) return '';
+      return text.slice(0, 180);
+    }
+
+    function markMessageButtonsPlayed(message) {
+      if (!message) return;
+      message.dataset.audioAutoPlayed = 'true';
+      message
+        .querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only')
+        .forEach(btn => {
+          btn.dataset.autoPlayed = 'true';
+        });
+    }
+
+    function scheduleAutoPlayLatestAudio(delay = 260) {
+      clearTimeout(autoPlayRetryTimer);
+      autoPlayRetryTimer = setTimeout(autoPlayLatestAudio, delay);
+    }
+
+    function autoPlayLatestAudio() {
+      if (!timerStarted) return;
+      allowSdkIframeAutoplay();
+
+      if (!voiceAutoplayUnlocked) {
+        setVoiceUnlockVisible(true);
+        return;
+      }
+
+      const allBtns = document.querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only');
+      const playBtns = Array.from(allBtns).filter(btn => {
+        if (btn.dataset.autoPlayed === 'true') return false;
+        return isLikelyAudioPlayButton(btn);
+      });
+
+      if (playBtns.length === 0) return;
+
+      const latestBtn = pickLatestAssistantAudioButton(playBtns);
+      if (!latestBtn) return;
+
+      const latestMessage = getMessageContainer(latestBtn);
+      const messageKey = buildAudioMessageKey(latestMessage);
+      if (!messageKey) return;
+
+      const now = Date.now();
+      if (
+        playedAudioMessageKeys.has(messageKey) ||
+        pendingAudioMessageKey === messageKey ||
+        now - lastAudioPlayAt < 1200
+      ) {
+        markMessageButtonsPlayed(latestMessage);
+        return;
+      }
+
+      pendingAudioMessageKey = messageKey;
+      playedAudioMessageKeys.add(messageKey);
+      lastAudioPlayAt = now;
+      latestBtn.dataset.autoPlayed = 'true';
+      markMessageButtonsPlayed(latestMessage);
+
+      setTimeout(() => {
+        try {
+          latestBtn.click();
+          pendingAudioMessageKey = '';
+        } catch (e) {
+          latestBtn.dataset.autoPlayed = 'false';
+          pendingAudioMessageKey = '';
+          console.warn('自动播放点击失败:', e);
+        }
+      }, 260);
+    }
+
     const observer = new MutationObserver(() => {
       applyVoiceOnlyUI();
+      autoPlayLatestAudio();  // 新增自动播放
     });
 
     observer.observe(document.body, {
@@ -629,6 +1032,12 @@
       updateStageUI();
 
       timerInterval = setInterval(tick, 1000);
+      // 提前激活音频上下文（保证后续自动播放不被拦截）
+      if (!voiceAutoplayUnlocked) {
+        setVoiceUnlockVisible(true);
+      } else {
+        scheduleAutoPlayLatestAudio(80);
+      }
     }
 
     async function handleStage1End() {
