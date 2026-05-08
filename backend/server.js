@@ -548,6 +548,28 @@ async function listChatMessages({ conversationId, chatId }) {
   return cozeFetch(path, { method: 'GET' });
 }
 
+async function cancelChat({ conversationId, chatId }) {
+  if (!conversationId) throw new Error('conversationId 不能为空');
+
+  const payload = {
+    conversation_id: conversationId
+  };
+  if (chatId) payload.chat_id = chatId;
+
+  try {
+    return await cozeFetch('/v3/chat/cancel', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  } catch (err) {
+    if (!chatId) throw err;
+    return cozeFetch('/v3/chat/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId })
+    });
+  }
+}
+
 function getMessageItems(messageListResponse) {
   const data = messageListResponse?.data;
   if (Array.isArray(data)) return data;
@@ -833,9 +855,11 @@ app.post('/api/session/start', (req, res) => {
 });
 
 app.post('/api/chat/send', async (req, res) => {
+  let session = null;
+  let chatId = '';
   try {
     const { localSessionId, content } = req.body || {};
-    const session = getSessionOrThrow(localSessionId);
+    session = getSessionOrThrow(localSessionId);
     const text = normalizeTranscript(content);
 
     if (!text) {
@@ -845,18 +869,34 @@ app.post('/api/chat/send', async (req, res) => {
       });
     }
 
-    const { chatId } = await startChat({
+    const started = await startChat({
       conversationId: session.conversationId,
       userId: session.cozeUserId,
       content: text
     });
+    chatId = started.chatId;
+    session.activeChatId = chatId;
+    session.cancelRequestedChatId = '';
+    session.updatedAt = Date.now();
 
     const result = await waitForChatAndGetAnswer({
       conversationId: session.conversationId,
       chatId
     });
 
+    if (session.cancelRequestedChatId === chatId) {
+      return res.json({
+        ok: true,
+        canceled: true,
+        answer: '',
+        audioUrl: null
+      });
+    }
+
     session.updatedAt = Date.now();
+    if (session.activeChatId === chatId) {
+      session.activeChatId = '';
+    }
     let audioUrl = null;
     try {
       audioUrl = await synthesizeSpeech(result.answer || '');
@@ -870,7 +910,61 @@ app.post('/api/chat/send', async (req, res) => {
       audioUrl
     });
   } catch (err) {
+    if (session && chatId && session.cancelRequestedChatId === chatId) {
+      if (session.activeChatId === chatId) {
+        session.activeChatId = '';
+      }
+      return res.json({
+        ok: true,
+        canceled: true,
+        answer: '',
+        audioUrl: null
+      });
+    }
+    if (session && chatId && session.activeChatId === chatId) {
+      session.activeChatId = '';
+    }
     console.error('/api/chat/send error:', err);
+    res.status(err.statusCode || 500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+app.post('/api/chat/cancel', async (req, res) => {
+  try {
+    const { localSessionId } = req.body || {};
+    const session = getSessionOrThrow(localSessionId);
+    const chatId = session.activeChatId;
+
+    session.cancelRequestedChatId = chatId || '';
+    session.activeChatId = '';
+    session.updatedAt = Date.now();
+
+    if (!chatId) {
+      return res.json({
+        ok: true,
+        canceled: false,
+        message: 'no active chat'
+      });
+    }
+
+    try {
+      await cancelChat({
+        conversationId: session.conversationId,
+        chatId
+      });
+    } catch (cancelErr) {
+      console.warn('/api/chat/cancel warning:', cancelErr.message);
+    }
+
+    res.json({
+      ok: true,
+      canceled: true
+    });
+  } catch (err) {
+    console.error('/api/chat/cancel error:', err);
     res.status(err.statusCode || 500).json({
       ok: false,
       error: err.message

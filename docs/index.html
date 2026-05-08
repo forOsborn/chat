@@ -258,6 +258,25 @@
       white-space: nowrap;
     }
 
+    .stop-reply-btn {
+      display: none;
+      min-height: 36px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: #fff1f2;
+      border: 1px solid #fecaca;
+      color: var(--danger);
+      font-size: 14px;
+      font-weight: 700;
+      box-shadow: 0 8px 22px rgba(180, 35, 24, 0.1);
+    }
+
+    .stop-reply-btn.show {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
     .voice-cancel {
       display: none;
       min-width: 124px;
@@ -469,6 +488,7 @@
     <form id="composer" class="composer">
       <div id="voice-cancel" class="voice-cancel">上滑取消</div>
       <button id="mic-btn" class="icon-btn" type="button" title="按住说话，松开发送" aria-label="按住语音输入"></button>
+      <button id="stop-reply-btn" class="stop-reply-btn" type="button">停止回复</button>
       <div id="voice-status" class="voice-status">按住麦克风开始说话，松开发送</div>
       <textarea id="message-input" rows="1" aria-hidden="true" tabindex="-1"></textarea>
       <button id="send-btn" class="send-btn" type="submit">发送</button>
@@ -517,6 +537,9 @@
     let audioUnlocked = false;
     let pendingAudioUrl = '';
     let audioRetryTimer = null;
+    let activeRequestController = null;
+    let activeRequestSeq = 0;
+    let canceledRequestSeq = 0;
     const USE_BROWSER_SPEECH_RECOGNITION = true;
 
     const STAGE_MINUTES = TEST_MODE ? TEST_STAGE_MINUTES : FORMAL_STAGE_MINUTES;
@@ -529,6 +552,7 @@
     const inputEl = document.getElementById('message-input');
     const sendBtn = document.getElementById('send-btn');
     const micBtn = document.getElementById('mic-btn');
+    const stopReplyBtn = document.getElementById('stop-reply-btn');
     const voiceCancelEl = document.getElementById('voice-cancel');
     const voiceStatusEl = document.getElementById('voice-status');
     const audioEl = document.getElementById('assistant-audio');
@@ -672,10 +696,12 @@
           res = await fetch(`${BACKEND_BASE}${path}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body || {})
+            body: JSON.stringify(body || {}),
+            signal: options.signal
           });
           break;
         } catch (fetchErr) {
+          if (fetchErr.name === 'AbortError') throw fetchErr;
           lastFetchErr = fetchErr;
           if (attempt < retries) {
             await sleep(retryDelayMs * (attempt + 1));
@@ -744,6 +770,7 @@
     function setSending(value) {
       sending = value;
       micBtn.disabled = value;
+      stopReplyBtn.classList.toggle('show', value);
       if (!recognizing && voiceStatusEl) {
         voiceStatusEl.textContent = value ? '正在等待助手回复...' : '按住麦克风开始说话，松开发送';
       }
@@ -752,6 +779,52 @@
     function isStartTrainingMessage(content) {
       const text = normalizeText(content).replace(/[。.!！\s]/g, '');
       return text === '开始训练';
+    }
+
+    function getCompactText(content) {
+      return normalizeText(content).replace(/[。.!！？，,、\s]/g, '');
+    }
+
+    function detectRequestedCase(content) {
+      const compact = getCompactText(content);
+      if (!compact) return 0;
+
+      const case1Aliases = [
+        '案例一',
+        '案例1',
+        '第一案例',
+        '第一个案例',
+        '第一阶段',
+        '阶段一',
+        '一阶段'
+      ];
+      if (case1Aliases.some(item => compact.includes(item))) return 1;
+
+      const case2Aliases = [
+        '案例二',
+        '案例2',
+        '第二案例',
+        '第二个案例',
+        '第二阶段',
+        '阶段二',
+        '二阶段',
+        '下一阶段'
+      ];
+      if (case2Aliases.some(item => compact.includes(item))) return 2;
+
+      return 0;
+    }
+
+    function getStageConflictMessage(content) {
+      if (!timerStarted || currentStage === 0 || currentStage === 3) return '';
+      const requestedCase = detectRequestedCase(content);
+      if (currentStage === 1 && requestedCase === 2) {
+        return '当前处于第一阶段（案例一）训练时间内，暂不可进行案例二训练。请继续完成案例一；第一阶段到时后再进入案例二。';
+      }
+      if (currentStage === 2 && requestedCase === 1) {
+        return '当前处于第二阶段（案例二）训练时间内，暂不可进行案例一训练。请继续完成案例二；如需重练案例一，请重新开始一轮训练。';
+      }
+      return '';
     }
 
     function normalizeTrainingCommand(text) {
@@ -803,6 +876,21 @@
       ];
       if (stage2Aliases.some(item => compact === item || compact.includes(item))) {
         return '进入第二阶段';
+      }
+
+      const repeatCaseAliases = [
+        '再来一次案例',
+        '重来一次案例',
+        '重新来一次案例',
+        '重新训练案例',
+        '再练一次案例'
+      ];
+      const requestedCase = detectRequestedCase(raw);
+      if (!requestedCase && timerStarted && currentStage === 1 && repeatCaseAliases.some(item => compact.includes(item))) {
+        return '再来一次案例一';
+      }
+      if (!requestedCase && timerStarted && currentStage === 2 && repeatCaseAliases.some(item => compact.includes(item))) {
+        return '再来一次案例二';
       }
 
       return raw;
@@ -887,12 +975,12 @@
       updateStageUI();
     }
 
-    async function sendChatToBackend(text) {
+    async function sendChatToBackend(text, signal) {
       try {
         return await postJson('/api/chat/send', {
           localSessionId,
           content: text
-        });
+        }, { signal });
       } catch (err) {
         if (!isMissingSessionError(err)) throw err;
         await createTrainingSession();
@@ -901,13 +989,37 @@
         return postJson('/api/chat/send', {
           localSessionId,
           content: text
-        });
+        }, { signal });
+      }
+    }
+
+    async function cancelAssistantReply() {
+      if (!sending || !activeRequestController) return;
+      canceledRequestSeq = activeRequestSeq;
+      activeRequestController.abort();
+      stopAssistantAudio();
+      stopReplyBtn.classList.remove('show');
+      voiceStatusEl.textContent = '已停止助手回复，可以重新说一遍';
+      try {
+        await postJson('/api/chat/cancel', { localSessionId }, { retries: 0 });
+      } catch (err) {
       }
     }
 
     async function sendMessage(content) {
       const text = normalizeText(content);
       if (!text || sending) return;
+
+      const stageConflictMessage = getStageConflictMessage(text);
+      if (stageConflictMessage) {
+        appendMessage('user', text);
+        appendMessage('assistant', stageConflictMessage);
+        inputEl.value = '';
+        autoResizeInput();
+        showToast(stageConflictMessage, 6200);
+        inputEl.focus();
+        return;
+      }
 
       currentStageAtSend = currentStage || 1;
       appendMessage('user', text);
@@ -917,8 +1029,18 @@
       setSending(true);
 
       const typing = appendTyping();
+      const requestSeq = activeRequestSeq + 1;
+      const controller = new AbortController();
+      activeRequestSeq = requestSeq;
+      activeRequestController = controller;
       try {
-        const data = await sendChatToBackend(text);
+        const data = await sendChatToBackend(text, controller.signal);
+        if (canceledRequestSeq === requestSeq) return;
+        if (data.canceled) {
+          removeNode(typing);
+          appendMessage('assistant', '已停止本次回复，请重新输入或重新按住麦克风说话。');
+          return;
+        }
 
         if (isStartTrainingMessage(text) && !timerStarted) {
           await markTrainingStarted();
@@ -933,9 +1055,16 @@
         playAssistantAudio(data.audioUrl);
       } catch (err) {
         removeNode(typing);
-        appendMessage('assistant', `请求失败：${err.message}`);
+        if (err.name === 'AbortError') {
+          appendMessage('assistant', '已停止本次回复，请重新输入或重新按住麦克风说话。');
+        } else {
+          appendMessage('assistant', `请求失败：${err.message}`);
+        }
       } finally {
-        setSending(false);
+        if (activeRequestSeq === requestSeq) {
+          activeRequestController = null;
+          setSending(false);
+        }
         inputEl.focus();
       }
     }
@@ -1390,6 +1519,7 @@
     micBtn.addEventListener('touchcancel', finishPressToTalk, { passive: false });
     voiceCancelEl.addEventListener('pointermove', movePressToTalk);
     voiceCancelEl.addEventListener('touchmove', movePressToTalk, { passive: false });
+    stopReplyBtn.addEventListener('click', cancelAssistantReply);
     micBtn.addEventListener('contextmenu', event => event.preventDefault());
     document.addEventListener('pointerdown', unlockAudioPlayback, { once: true, passive: true });
     document.addEventListener('touchstart', unlockAudioPlayback, { once: true, passive: true });
