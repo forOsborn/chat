@@ -781,6 +781,21 @@
       return text === '开始训练';
     }
 
+    function isManualScoreRequest(content) {
+      const compact = getCompactText(content);
+      const aliases = [
+        '结束本轮',
+        '结束对话',
+        '本轮结束',
+        '请评分',
+        '请评价',
+        '输出反馈',
+        '给我反馈',
+        '我说完了'
+      ];
+      return aliases.some(item => compact === item || compact.includes(item));
+    }
+
     function getCompactText(content) {
       return normalizeText(content).replace(/[。.!！？，,、\s]/g, '');
     }
@@ -1006,9 +1021,51 @@
       }
     }
 
+    async function requestManualScore(text) {
+      currentStageAtSend = currentStage || 1;
+      appendMessage('user', text);
+      pushChatLog('user', text, currentStageAtSend);
+      inputEl.value = '';
+      autoResizeInput();
+      setSending(true);
+
+      const typing = appendTyping();
+      try {
+        const data = await postJson('/api/session/score-current', {
+          localSessionId,
+          stage: currentStageAtSend,
+          transcript: getStageTranscript(currentStageAtSend)
+        });
+        const answer = cleanForDisplayText(data.answer || '暂无反馈');
+        removeNode(typing);
+        appendMessage('assistant', answer);
+        pushChatLog('assistant', answer, currentStageAtSend);
+        playAssistantAudio(data.audioUrl);
+      } catch (err) {
+        removeNode(typing);
+        appendMessage('assistant', `评分失败：${err.message}`);
+      } finally {
+        setSending(false);
+        inputEl.focus();
+      }
+    }
+
     async function sendMessage(content) {
       const text = normalizeText(content);
       if (!text || sending) return;
+
+      if (isManualScoreRequest(text)) {
+        if (!timerStarted || currentStage === 0) {
+          appendMessage('user', text);
+          appendMessage('assistant', '当前还没有开始训练，请先输入“开始训练”。');
+          inputEl.value = '';
+          autoResizeInput();
+          inputEl.focus();
+          return;
+        }
+        await requestManualScore(text);
+        return;
+      }
 
       const stageConflictMessage = getStageConflictMessage(text);
       if (stageConflictMessage) {

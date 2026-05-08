@@ -429,8 +429,9 @@ function parseTranscriptStats(transcript) {
   };
 }
 
-function buildNoEffectiveDialogueReport({ stageLabel, caseLabel }) {
-  return [
+function buildNoEffectiveDialogueReport({ stageLabel, caseLabel, forceTimeUp = true }) {
+  const lines = [
+    forceTimeUp ? '当前阶段时间已到，本轮对话已结束。' : '',
     '【护理差错告知能力反馈报告】',
     `阶段：${stageLabel} | 案例：${caseLabel}`,
     '',
@@ -447,7 +448,13 @@ function buildNoEffectiveDialogueReport({ stageLabel, caseLabel }) {
     '- 先尽快进入正式告知开场，不要停留在案例阅读阶段',
     '- 说明情况后及时观察并回应患者的第一反应',
     '- 完成至少一轮有效问答后，再进入反馈评估'
-  ].join('\n');
+  ];
+
+  if (!forceTimeUp) {
+    lines.push('', `当前阶段尚未结束。若你希望继续训练，请输入“再来一次${caseLabel}”或“开始${caseLabel}”。`);
+  }
+
+  return lines.filter(Boolean).join('\n');
 }
 
 async function cozeFetch(path, options = {}) {
@@ -664,6 +671,9 @@ function buildScoringPrompt({ stageLabel, caseLabel, transcript, forceTimeUp = t
   const header = forceTimeUp
     ? '当前阶段时间已到，本轮对话已结束。'
     : '';
+  const voluntaryEnding = forceTimeUp
+    ? ''
+    : `当前阶段尚未结束。若你希望继续训练，请输入“再来一次${caseLabel}”或“开始${caseLabel}”。`;
 
   return [
     '你现在不是患者，也不是案例训练角色。',
@@ -708,6 +718,7 @@ function buildScoringPrompt({ stageLabel, caseLabel, transcript, forceTimeUp = t
     '- 建议1',
     '- 建议2',
     '- 建议3',
+    voluntaryEnding,
     '',
     '额外约束：',
     '1. “建议下一句”必须是学员下一次可以直接说出口的话。',
@@ -965,6 +976,60 @@ app.post('/api/chat/cancel', async (req, res) => {
     });
   } catch (err) {
     console.error('/api/chat/cancel error:', err);
+    res.status(err.statusCode || 500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+app.post('/api/session/score-current', async (req, res) => {
+  try {
+    const { localSessionId, transcript, stage } = req.body || {};
+    const session = getSessionOrThrow(localSessionId);
+    const currentStage = Number(stage || session.currentStage || 1);
+    const stageLabel = currentStage === 2 ? '阶段二' : '阶段一';
+    const caseLabel = currentStage === 2 ? '案例二' : '案例一';
+    const stats = parseTranscriptStats(transcript);
+
+    let answer = '';
+    if (!stats.hasEffectiveDialogue) {
+      answer = buildNoEffectiveDialogueReport({
+        stageLabel,
+        caseLabel,
+        forceTimeUp: false
+      });
+    } else {
+      const prompt = buildScoringPrompt({
+        stageLabel,
+        caseLabel,
+        transcript,
+        forceTimeUp: false
+      });
+
+      const result = await sendOneOffMessage({
+        content: prompt,
+        userId: `score_manual_${Date.now()}`
+      });
+
+      answer = result.answer;
+    }
+
+    session.updatedAt = Date.now();
+    let audioUrl = null;
+    try {
+      audioUrl = await synthesizeSpeech(answer || '');
+    } catch (ttsErr) {
+      console.warn('/api/session/score-current tts warning:', ttsErr.message);
+    }
+
+    res.json({
+      ok: true,
+      answer,
+      audioUrl
+    });
+  } catch (err) {
+    console.error('/api/session/score-current error:', err);
     res.status(err.statusCode || 500).json({
       ok: false,
       error: err.message
