@@ -509,6 +509,9 @@
     let shouldSendVoiceOnEnd = false;
     let recognitionStartCanceled = false;
     let stoppingVoice = false;
+    let recognitionStarting = false;
+    let suppressNextTouchEvent = false;
+    let lastVoiceStartAt = 0;
     let speechErrorMessage = '';
     let voiceCanceling = false;
     let audioUnlocked = false;
@@ -1086,6 +1089,7 @@
 
       recognition.onstart = () => {
         recognizing = true;
+        recognitionStarting = false;
         recognitionHadError = false;
         finalVoiceText = '';
         recognitionStartCanceled = false;
@@ -1095,6 +1099,7 @@
         voiceStatusEl.textContent = '正在聆听，松开发送';
       };
       recognition.onend = async () => {
+        recognitionStarting = false;
         recognizing = false;
         micBtn.classList.remove('active');
         micBtn.setAttribute('aria-label', '按住语音输入');
@@ -1180,6 +1185,24 @@
       voiceStatusEl.textContent = voiceCanceling ? '松开手指，取消发送' : '正在聆听，松开发送';
     }
 
+    function resetRecognitionUi() {
+      recognitionStarting = false;
+      recognizing = false;
+      isPressingMic = false;
+      micBtn.classList.remove('active');
+      micBtn.setAttribute('aria-label', '按住语音输入');
+      showVoiceCancel(false);
+      voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+    }
+
+    function getStartErrorMessage(err) {
+      const message = String(err?.message || err?.name || '');
+      if (/already started/i.test(message)) {
+        return '语音识别已经在进行中，请先松开后再重新按住。';
+      }
+      return message || '语音识别启动失败，请重试。';
+    }
+
     async function cancelVoiceInput() {
       isPressingMic = false;
       shouldSendVoiceOnEnd = false;
@@ -1195,6 +1218,7 @@
         }
       }
 
+      recognitionStarting = false;
       recognizing = false;
       micBtn.classList.remove('active');
       micBtn.setAttribute('aria-label', '按住语音输入');
@@ -1209,7 +1233,19 @@
 
     async function startPressToTalk(event) {
       event.preventDefault();
-      if (sending || recognizing || isPressingMic || stoppingVoice) return;
+      if (event.type === 'pointerdown') {
+        suppressNextTouchEvent = true;
+        setTimeout(() => {
+          suppressNextTouchEvent = false;
+        }, 450);
+      } else if (event.type === 'touchstart' && suppressNextTouchEvent) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastVoiceStartAt < 350) return;
+      if (sending || recognizing || recognitionStarting || isPressingMic || stoppingVoice) return;
+      lastVoiceStartAt = now;
       unlockAudioPlayback();
 
       isPressingMic = true;
@@ -1232,6 +1268,7 @@
       try {
         voiceStatusEl.textContent = '正在请求麦克风权限...';
         await ensureMicrophonePermission();
+        recognitionStarting = true;
         recognizing = true;
         micBtn.classList.add('active');
         micBtn.setAttribute('aria-label', '松开发送语音');
@@ -1241,13 +1278,9 @@
           recognition.start();
         }
       } catch (err) {
-        isPressingMic = false;
+        resetRecognitionUi();
         shouldSendVoiceOnEnd = false;
-        recognizing = false;
-        micBtn.classList.remove('active');
-        showVoiceCancel(false);
-        voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
-        showToast(err.message, 8000);
+        showToast(getStartErrorMessage(err), 5000);
       }
     }
 
@@ -1258,7 +1291,8 @@
 
     async function finishPressToTalk(event) {
       event.preventDefault();
-      if (sending || stoppingVoice || (!recognizing && !isPressingMic)) return;
+      if (event.type === 'touchend' && suppressNextTouchEvent) return;
+      if (sending || stoppingVoice || (!recognizing && !recognitionStarting && !isPressingMic)) return;
       stoppingVoice = true;
       const shouldCancel = voiceCanceling || isPointInCancelZone(getVoicePoint(event));
       if (event.pointerId !== undefined && micBtn.releasePointerCapture) {
@@ -1275,9 +1309,14 @@
           await cancelVoiceInput();
           return;
         }
-        if (USE_BROWSER_SPEECH_RECOGNITION && recognition && recognizing) {
+        if (USE_BROWSER_SPEECH_RECOGNITION && recognition && (recognizing || recognitionStarting)) {
           voiceStatusEl.textContent = '正在发送语音...';
-          recognition.stop();
+          try {
+            recognition.stop();
+          } catch (err) {
+            resetRecognitionUi();
+            showToast(getStartErrorMessage(err), 5000);
+          }
         } else if (recognitionStartCanceled) {
           shouldSendVoiceOnEnd = false;
           recognitionStartCanceled = false;
