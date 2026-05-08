@@ -652,16 +652,37 @@
         .join('\n');
     }
 
-    async function postJson(path, body) {
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function postJson(path, body, options = {}) {
+      const retries = options.retries ?? 2;
+      const retryDelayMs = options.retryDelayMs ?? 1200;
       let res;
-      try {
-        res = await fetch(`${BACKEND_BASE}${path}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body || {})
-        });
-      } catch (fetchErr) {
-        throw new Error(`后端服务暂时不可达，请检查 Railway 后端是否已启动：${BACKEND_BASE}`);
+      let lastFetchErr = null;
+
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          res = await fetch(`${BACKEND_BASE}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body || {})
+          });
+          break;
+        } catch (fetchErr) {
+          lastFetchErr = fetchErr;
+          if (attempt < retries) {
+            await sleep(retryDelayMs * (attempt + 1));
+            continue;
+          }
+        }
+      }
+
+      if (!res) {
+        throw new Error(
+          `后端连接中断，请稍后重试。Railway 服务当前可能正在重启、冷启动或网络波动：${BACKEND_BASE}`
+        );
       }
 
       const data = await res.json().catch(() => ({}));
