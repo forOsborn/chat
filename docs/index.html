@@ -4,233 +4,409 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>护理差错告知AI助手</title>
-
-  <script src="https://lf-cdn.coze.cn/obj/unpkg/flow-platform/chat-app-sdk/1.2.0-beta.20/libs/cn/index.js"></script>
-
   <style>
-    html, body {
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --line: #dfe4ea;
+      --text: #1f2933;
+      --muted: #6b7280;
+      --primary: #2563eb;
+      --primary-soft: #dbeafe;
+      --assistant: #eef2f7;
+      --user: #dfe6ff;
+      --danger: #b42318;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
       margin: 0;
-      padding: 0;
-      height: 100%;
-      background: #f5f6f8;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+    }
+
+    body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      place-items: stretch center;
+      padding: 28px 16px;
+    }
+
+    button,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.58;
+    }
+
+    .app {
+      width: min(100%, 760px);
+      height: calc(100vh - 56px);
+      min-height: 560px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
       overflow: hidden;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12);
     }
 
-    textarea,
-    input[type="text"],
-    input:not([type]),
-    [contenteditable="true"] {
-      display: none !important;
-      visibility: hidden !important;
-      pointer-events: none !important;
+    .topbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+      min-height: 70px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
     }
 
-    #status-panel {
-      position: fixed;
-      top: 16px;
-      right: 20px;
-      z-index: 9999;
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 20px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: #111827;
+      color: #fff;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.secondary {
+      background: #374151;
+      font-weight: 600;
+    }
+
+    .messages {
+      overflow: auto;
+      padding: 20px 18px 24px;
+      background: linear-gradient(#fff, #f8fafc);
+    }
+
+    .message-row {
+      display: flex;
+      gap: 10px;
+      margin: 0 0 18px;
+      align-items: flex-start;
+      width: 100%;
+    }
+
+    .message-row.user {
+      justify-content: flex-end;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #e5e7eb;
+      color: #4b5563;
+      font-weight: 700;
+    }
+
+    .assistant .avatar {
+      background: #dbeafe;
+      color: #1d4ed8;
+    }
+
+    .bubble {
+      width: fit-content;
+      max-width: min(640px, 84vw);
+      padding: 13px 15px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      line-height: 1.65;
+      font-size: 16px;
+      overflow-wrap: break-word;
+      word-break: normal;
+    }
+
+    .assistant .bubble {
+      background: var(--assistant);
+    }
+
+    .user .bubble {
+      background: var(--user);
+      max-width: min(520px, 70vw);
+      margin-left: auto;
+      word-break: keep-all;
+      overflow-wrap: normal;
+    }
+
+    .bubble.force-break {
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .meta {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 12px 16px 14px;
+      background: #fff;
       display: flex;
       flex-direction: column;
-      align-items: flex-end;
-      gap: 10px;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    .icon-btn {
+      position: relative;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: #eef2f7;
+      color: var(--primary);
+      display: grid;
+      place-items: center;
+      box-shadow: 0 6px 18px rgba(37, 99, 235, 0.18);
+      transition: transform 0.16s ease, background 0.16s ease, color 0.16s ease;
+      touch-action: none;
       user-select: none;
     }
 
-    #stage-badge,
-    #training-timer {
-      background: rgba(0, 0, 0, 0.72);
+    .icon-btn::before {
+      content: "🎙";
+      font-size: 25px;
+      line-height: 1;
+    }
+
+    .icon-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      background: var(--primary);
       color: #fff;
-      border-radius: 999px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.18);
     }
 
-    #stage-badge {
-      padding: 7px 14px;
-      font-size: 14px;
-      font-weight: 600;
-      line-height: 1;
+    .icon-btn.active {
+      background: var(--danger);
+      color: #fff;
+      box-shadow: 0 8px 22px rgba(180, 35, 24, 0.22);
     }
 
-    #training-timer {
-      padding: 8px 14px;
-      font-size: 18px;
-      font-weight: 700;
-      line-height: 1;
+    .icon-btn.active::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+      border-radius: 50%;
+      border: 2px solid rgba(180, 35, 24, 0.28);
+      animation: pulse-ring 1.3s ease-out infinite;
     }
 
-    #stage-tip {
-    /*
-      position: fixed;
-      top: 16px;
-      left: 20px;
-      z-index: 9998;
-      background: rgba(255,255,255,0.95);
-      color: #333;
-      border: 1px solid rgba(0,0,0,0.08);
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-size: 14px;
+    .voice-status {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      text-align: center;
+      max-width: min(92%, 520px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    @keyframes pulse-ring {
+      0% {
+        transform: scale(0.86);
+        opacity: 0.9;
+      }
+      100% {
+        transform: scale(1.28);
+        opacity: 0;
+      }
+    }
+
+    .send-btn {
+      padding: 0 18px;
+      background: var(--primary);
+      color: #fff;
+    }
+
+    textarea {
+      display: none;
+      width: 100%;
+      min-height: 44px;
+      max-height: 132px;
+      resize: none;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
       line-height: 1.5;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-      max-width: min(56vw, 560px);
-    */
-      display: none !important;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .send-btn {
+      display: none;
     }
 
     #timer-toast {
       position: fixed;
-      top: 96px;
-      right: 20px;
-      z-index: 9999;
-      background: #fff3cd;
-      color: #856404;
-      border: 1px solid #ffe69c;
-      padding: 10px 14px;
-      border-radius: 10px;
-      font-size: 14px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-      max-width: 420px;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
       display: none;
+      max-width: min(92vw, 560px);
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #9a3412;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
       line-height: 1.5;
-      white-space: pre-wrap;
     }
 
     #timeout-overlay {
       position: fixed;
       inset: 0;
-      z-index: 10000;
-      background: rgba(0, 0, 0, 0.45);
+      z-index: 30;
       display: none;
       align-items: center;
       justify-content: center;
+      padding: 18px;
+      background: rgba(15, 23, 42, 0.45);
     }
 
     #timeout-box {
-      width: min(92vw, 860px);
-      max-height: 82vh;
+      width: min(100%, 820px);
+      max-height: 86vh;
       overflow: auto;
       background: #fff;
-      border-radius: 16px;
-      padding: 24px 20px;
-      box-shadow: 0 10px 28px rgba(0,0,0,0.18);
+      border-radius: 8px;
+      padding: 22px;
+      box-shadow: 0 24px 56px rgba(15, 23, 42, 0.2);
     }
 
     #timeout-box h2 {
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       font-size: 22px;
-      color: #222;
-      text-align: center;
     }
 
     #timeout-box p {
       margin: 8px 0;
-      font-size: 15px;
-      color: #333;
-      line-height: 1.6;
+      line-height: 1.65;
     }
 
     #feedback-content {
       margin-top: 14px;
       padding: 14px;
-      background: #f8f9fb;
-      border: 1px solid #e5e7eb;
-      border-radius: 12px;
-      font-size: 14px;
-      line-height: 1.75;
-      color: #222;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
       white-space: pre-wrap;
-    }
-
-    .timeout-tip {
-      font-size: 13px !important;
-      color: #666 !important;
-      text-align: center;
+      line-height: 1.75;
     }
 
     .timeout-actions {
-      margin-top: 18px;
       display: flex;
-      gap: 12px;
-      justify-content: center;
+      gap: 10px;
+      justify-content: flex-end;
       flex-wrap: wrap;
+      margin-top: 18px;
     }
 
     .timeout-actions button {
-      border: none;
-      border-radius: 10px;
-      padding: 10px 16px;
-      font-size: 14px;
-      cursor: pointer;
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 8px;
+      background: #eef2f7;
     }
 
-    #close-timeout,
-    #stage-next {
-      background: #1677ff;
+    .timeout-actions .primary {
+      background: var(--primary);
       color: #fff;
     }
 
-    #restart-training {
-      background: #f1f3f5;
-      color: #333;
-    }
+    @media (max-width: 640px) {
+      body {
+        padding: 0;
+      }
 
-    body.training-timeout {
-      overflow: hidden;
-    }
+      .app {
+        width: 100%;
+        height: 100vh;
+        min-height: 100vh;
+        border: 0;
+        border-radius: 0;
+      }
 
-    #voice-unlock {
-      position: fixed;
-      left: 50%;
-      bottom: 18px;
-      transform: translateX(-50%);
-      z-index: 10001;
-      display: none !important;
-      align-items: center;
-      gap: 10px;
-      border: none;
-      border-radius: 999px;
-      padding: 11px 18px;
-      background: #1677ff;
-      color: #fff;
-      box-shadow: 0 8px 24px rgba(22, 119, 255, 0.28);
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-    }
+      .topbar {
+        grid-template-columns: 1fr;
+      }
 
-    #voice-unlock.is-hidden {
-      display: none;
-    }
+      .status {
+        justify-content: flex-start;
+      }
 
-    [class*="thinking" i],
-    [class*="think" i],
-    [class*="reasoning" i],
-    [class*="reason" i],
-    [class*="thought" i],
-    [data-testid*="thinking" i],
-    [data-testid*="reasoning" i],
-    [data-testid*="thought" i] {
-      display: none !important;
-      visibility: hidden !important;
-    }
+      .bubble {
+        max-width: 88vw;
+      }
 
-    .e338c53da3cea5f5ba29 {
-      display: none !important;
-      visibility: hidden !important;
+      .user .bubble {
+        max-width: 78vw;
+      }
     }
   </style>
 </head>
 <body>
-  <div id="stage-tip">请先发送“开始训练”。计时从“开始训练”真正发出后开始。</div>
-
-  <div id="status-panel">
-    <div id="stage-badge">当前阶段：未开始</div>
-    <div id="training-timer">10:00</div>
-  </div>
-
   <div id="timer-toast"></div>
 
   <div id="timeout-overlay">
@@ -238,70 +414,84 @@
       <h2 id="overlay-title">提示</h2>
       <p id="overlay-text">内容加载中...</p>
       <div id="feedback-content">反馈内容加载中...</div>
-      <p class="timeout-tip" id="overlay-tip">请根据当前弹窗提示继续操作。</p>
+      <p id="overlay-tip"></p>
       <div class="timeout-actions">
-        <button id="close-timeout">我知道了</button>
-        <button id="stage-next" style="display:none;">进入下一阶段</button>
-        <button id="restart-training">重新开始训练</button>
+        <button id="restart-training">重新开始</button>
+        <button id="stage-next" class="primary" style="display:none;">进入下一阶段</button>
+        <button id="close-timeout" class="primary">我知道了</button>
       </div>
     </div>
   </div>
 
-  <button id="voice-unlock" type="button">点击开启语音自动播放</button>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div>护理差错告知AI助手</div>
+      </div>
+      <div class="status">
+        <div id="stage-badge" class="pill secondary">当前阶段：未开始</div>
+        <div id="training-timer" class="pill">60:00</div>
+      </div>
+    </header>
+
+    <section id="messages" class="messages" aria-live="polite"></section>
+
+    <form id="composer" class="composer">
+      <button id="mic-btn" class="icon-btn" type="button" title="按住说话，松开发送" aria-label="按住语音输入"></button>
+      <div id="voice-status" class="voice-status">按住麦克风开始说话，松开发送</div>
+      <textarea id="message-input" rows="1" aria-hidden="true" tabindex="-1"></textarea>
+      <button id="send-btn" class="send-btn" type="submit">发送</button>
+    </form>
+  </main>
+
+  <audio id="assistant-audio" preload="auto"></audio>
 
   <script>
-    const BACKEND_BASE = 'https://clever-trust-production.up.railway.app';
     //const BACKEND_BASE = 'http://localhost:3000';
-
-    //const TEST_MODE = true;
-    const TEST_MODE = false;
+    const BACKEND_BASE =chat-production-ef67.up.railway.app
+    const TEST_MODE = true;
     const TEST_STAGE_MINUTES = 5;
     const FORMAL_STAGE_MINUTES = 30;
-
-    const COZE_BOT_ID = '7612150713271320619';
-    const COZE_TOKEN = 'pat_CicAo3yhnmz4JkNE5dbByxtpeuKMRUWa0HDkzhSkhBmty4VLT5oOK9Pyyx5EtZQi';
-    const COZE_USER_ID = createIsolatedCozeUserId();
 
     let localSessionId = '';
     let timerStarted = false;
     let timerInterval = null;
-    let currentStage = 0; // 0未开始 1阶段一 2阶段二 3结束
+    let currentStage = 0;
     let totalSeconds = 0;
-
     let warnedStage1 = false;
     let warnedStage2 = false;
     let stage1Ended = false;
     let finalEnded = false;
     let stage1FeedbackLocked = false;
     let finalFeedbackLocked = false;
-
     let chatLog = [];
     let currentStageAtSend = 0;
-    let voiceAutoplayUnlocked = false;
-    let audioUnlockContext = null;
-    let autoPlayRetryTimer = null;
-    let liveSpeechMessage = null;
-    let liveSpeechText = '';
-    let liveSpeechSpokenLength = 0;
-    let liveSpeechQueue = [];
-    let liveSpeechSpeaking = false;
-    let liveSpeechFlushTimer = null;
-    let playedAudioMessageKeys = new Set();
-    let pendingAudioMessageKey = '';
-    let lastAudioPlayAt = 0;
+    let sending = false;
+    let recognition = null;
+    let recognizing = false;
+    let finalVoiceText = '';
+    let recognitionHadError = false;
+    let isPressingMic = false;
+    let shouldSendVoiceOnEnd = false;
+    let recognitionStartCanceled = false;
 
     const STAGE_MINUTES = TEST_MODE ? TEST_STAGE_MINUTES : FORMAL_STAGE_MINUTES;
     const TOTAL_SECONDS = STAGE_MINUTES * 60 * 2;
     const STAGE_SECONDS = STAGE_MINUTES * 60;
     const REMIND_SECONDS = Math.min(3 * 60, Math.max(60, Math.floor(STAGE_SECONDS * 0.2)));
 
-    totalSeconds = TOTAL_SECONDS;
-
+    const messagesEl = document.getElementById('messages');
+    const formEl = document.getElementById('composer');
+    const inputEl = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const micBtn = document.getElementById('mic-btn');
+    const voiceStatusEl = document.getElementById('voice-status');
+    const audioEl = document.getElementById('assistant-audio');
     const timerEl = () => document.getElementById('training-timer');
     const toastEl = () => document.getElementById('timer-toast');
     const overlayEl = () => document.getElementById('timeout-overlay');
     const stageBadgeEl = () => document.getElementById('stage-badge');
-    const stageTipEl = () => document.getElementById('stage-tip');
     const overlayTitleEl = () => document.getElementById('overlay-title');
     const overlayTextEl = () => document.getElementById('overlay-text');
     const overlayTipEl = () => document.getElementById('overlay-tip');
@@ -309,13 +499,15 @@
     const stageNextBtn = () => document.getElementById('stage-next');
     const closeBtn = () => document.getElementById('close-timeout');
 
+    totalSeconds = TOTAL_SECONDS;
+
     function formatTime(sec) {
       const m = Math.floor(sec / 60).toString().padStart(2, '0');
       const s = (sec % 60).toString().padStart(2, '0');
       return `${m}:${s}`;
     }
 
-    function showToast(message, duration = 5000) {
+    function showToast(message, duration = 4200) {
       const el = toastEl();
       el.textContent = message;
       el.style.display = 'block';
@@ -332,60 +524,11 @@
     function updateStageUI() {
       if (!timerStarted) {
         stageBadgeEl().textContent = '当前阶段：未开始';
-        stageTipEl().textContent = `请先发送“开始训练”。当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。`;
         return;
       }
-
-      if (currentStage === 1) {
-        stageBadgeEl().textContent = '当前阶段：第一阶段（案例一）';
-        stageTipEl().textContent = '当前仅进行案例一训练。时间到后系统会自动生成弹窗反馈。';
-      } else if (currentStage === 2) {
-        stageBadgeEl().textContent = '当前阶段：第二阶段（案例二）';
-        stageTipEl().textContent = '当前仅进行案例二训练。时间到后系统会自动生成弹窗反馈并结束。';
-      } else if (currentStage === 3) {
-        stageBadgeEl().textContent = '当前阶段：训练已结束';
-        stageTipEl().textContent = '训练已结束，请查看自动反馈结果。';
-      }
-    }
-
-    function openOverlay({ title, text, tip, feedback = '', showNext = false, showRestart = true, lock = true }) {
-      if (lock) document.body.classList.add('training-timeout');
-
-      overlayTitleEl().textContent = title;
-      overlayTextEl().textContent = text;
-      overlayTipEl().textContent = tip;
-      feedbackContentEl().textContent = feedback || '暂无反馈内容';
-
-      stageNextBtn().style.display = showNext ? 'inline-block' : 'none';
-      closeBtn().style.display = showNext ? 'none' : 'inline-block';
-      document.getElementById('restart-training').style.display = showRestart ? 'inline-block' : 'none';
-
-      overlayEl().style.display = 'flex';
-    }
-
-    function closeOverlay(unlock = true) {
-      overlayEl().style.display = 'none';
-      if (unlock) {
-        document.body.classList.remove('training-timeout');
-      }
-    }
-
-    function stopTimer() {
-      if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-      }
-    }
-
-    function pushChatLog(role, content, stage) {
-      const text = String(content || '').trim();
-      if (!text) return;
-      chatLog.push({
-        role,
-        content: text,
-        stage,
-        ts: Date.now()
-      });
+      if (currentStage === 1) stageBadgeEl().textContent = '当前阶段：第一阶段（案例一）';
+      else if (currentStage === 2) stageBadgeEl().textContent = '当前阶段：第二阶段（案例二）';
+      else if (currentStage === 3) stageBadgeEl().textContent = '当前阶段：训练已结束';
     }
 
     function normalizeText(text) {
@@ -393,6 +536,39 @@
         .replace(/\r/g, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+    }
+
+    function cleanForSpeechText(text) {
+      return normalizeText(text)
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+        .replace(/Powered by coze.*$/i, '')
+        .replace(/\\[rnt]/g, ' ')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '')
+        .replace(/[\\_]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function cleanForDisplayText(text) {
+      return normalizeText(text)
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+        .replace(/Powered by coze.*$/i, '')
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\n')
+        .replace(/\\t/g, '  ')
+        .replace(/\\"/g, '"')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    function pushChatLog(role, content, stage) {
+      const text = normalizeText(content);
+      if (!text) return;
+      chatLog.push({ role, content: text, stage, ts: Date.now() });
     }
 
     function getStageTranscript(stage) {
@@ -409,67 +585,203 @@
         .join('\n');
     }
 
-    function resetLocalState() {
-      stopTimer();
-
-      localSessionId = '';
-      timerStarted = false;
-      currentStage = 0;
-      totalSeconds = TOTAL_SECONDS;
-
-      warnedStage1 = false;
-      warnedStage2 = false;
-      stage1Ended = false;
-      finalEnded = false;
-      stage1FeedbackLocked = false;
-      finalFeedbackLocked = false;
-
-      chatLog = [];
-      currentStageAtSend = 0;
-      playedAudioMessageKeys.clear();
-      pendingAudioMessageKey = '';
-      lastAudioPlayAt = 0;
-
-      updateTimerUI();
-      updateStageUI();
-
-      const toast = toastEl();
-      toast.style.display = 'none';
-      clearTimeout(toast._timer);
-
-      closeOverlay(true);
+    async function postJson(path, body) {
+      const res = await fetch(`${BACKEND_BASE}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        const err = new Error(data.error || `请求失败: ${path}`);
+        err.status = res.status;
+        err.data = data;
+        throw err;
+      }
+      return data;
     }
 
-    function hardResetTrainingStateOnly() {
-      stopTimer();
+    function appendMessage(role, content, meta = '') {
+      const row = document.createElement('div');
+      row.className = `message-row ${role}`;
 
-      localSessionId = '';
-      timerStarted = false;
+      if (role === 'assistant') {
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar';
+        avatar.textContent = 'AI';
+        row.appendChild(avatar);
+      }
+
+      const wrap = document.createElement('div');
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      if (/[A-Za-z0-9_:/.-]{28,}/.test(content)) {
+        bubble.classList.add('force-break');
+      }
+      bubble.textContent = content;
+      wrap.appendChild(bubble);
+
+      if (meta) {
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.textContent = meta;
+        wrap.appendChild(metaEl);
+      }
+
+      row.appendChild(wrap);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return row;
+    }
+
+    function appendTyping() {
+      return appendMessage('assistant', '正在回复...', '请稍候');
+    }
+
+    function removeNode(node) {
+      if (node && node.parentElement) node.parentElement.removeChild(node);
+    }
+
+    function setSending(value) {
+      sending = value;
+      micBtn.disabled = value;
+      if (!recognizing && voiceStatusEl) {
+        voiceStatusEl.textContent = value ? '正在等待助手回复...' : '按住麦克风开始说话，松开发送';
+      }
+    }
+
+    function isStartTrainingMessage(content) {
+      const text = normalizeText(content).replace(/[。.!！\s]/g, '');
+      return text === '开始训练';
+    }
+
+    async function createTrainingSession() {
+      const data = await postJson('/api/session/new', {});
+      localSessionId = data.localSessionId;
+    }
+
+    async function markTrainingStarted() {
+      if (!localSessionId) return;
+      try {
+        await postJson('/api/session/start', { localSessionId });
+      } catch (err) {
+        if (!isMissingSessionError(err)) throw err;
+        await createTrainingSession();
+        await postJson('/api/session/start', { localSessionId });
+      }
+    }
+
+    function startTimer() {
+      if (timerStarted) return;
+      timerStarted = true;
+      currentStage = 1;
+      updateTimerUI();
+      updateStageUI();
+      timerInterval = setInterval(tick, 1000);
+    }
+
+    function stopTimer() {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    }
+
+    function playAssistantAudio(audioUrl) {
+      if (!audioUrl) return;
+      audioEl.src = audioUrl.startsWith('http') ? audioUrl : `${BACKEND_BASE}${audioUrl}`;
+      audioEl.play().catch(() => {
+        showToast('浏览器阻止了自动播放，请点击页面后继续训练。');
+      });
+    }
+
+    function isMissingSessionError(err) {
+      return err?.status === 404 && /session not found/i.test(err.message || '');
+    }
+
+    function resetLocalTrainingState() {
+      chatLog = [];
       currentStage = 0;
+      currentStageAtSend = 0;
+      timerStarted = false;
       totalSeconds = TOTAL_SECONDS;
-
-      warnedStage1 = false;
-      warnedStage2 = false;
       stage1Ended = false;
       finalEnded = false;
       stage1FeedbackLocked = false;
       finalFeedbackLocked = false;
-
-      chatLog = [];
-      currentStageAtSend = 0;
-      playedAudioMessageKeys.clear();
-      pendingAudioMessageKey = '';
-      lastAudioPlayAt = 0;
-
+      warnedStage1 = false;
+      warnedStage2 = false;
+      stopTimer();
       updateTimerUI();
       updateStageUI();
+    }
 
-      const toast = toastEl();
-      toast.style.display = 'none';
-      clearTimeout(toast._timer);
+    async function sendChatToBackend(text) {
+      try {
+        return await postJson('/api/chat/send', {
+          localSessionId,
+          content: text
+        });
+      } catch (err) {
+        if (!isMissingSessionError(err)) throw err;
+        await createTrainingSession();
+        resetLocalTrainingState();
+        showToast('检测到后端已重启，已自动开启一轮新会话。');
+        return postJson('/api/chat/send', {
+          localSessionId,
+          content: text
+        });
+      }
+    }
 
-      closeOverlay(true);
-      showToast('检测到已新开聊天，本轮计时与反馈记录已重置。', 3000);
+    async function sendMessage(content) {
+      const text = normalizeText(content);
+      if (!text || sending) return;
+
+      currentStageAtSend = currentStage || 1;
+      appendMessage('user', text);
+      pushChatLog('user', text, currentStageAtSend);
+      inputEl.value = '';
+      autoResizeInput();
+      setSending(true);
+
+      const typing = appendTyping();
+      try {
+        const data = await sendChatToBackend(text);
+
+        if (isStartTrainingMessage(text) && !timerStarted) {
+          await markTrainingStarted();
+          startTimer();
+          showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。`);
+        }
+
+        const answer = cleanForDisplayText(data.answer || '暂无回复');
+        removeNode(typing);
+        appendMessage('assistant', answer);
+        pushChatLog('assistant', answer, currentStageAtSend);
+        playAssistantAudio(data.audioUrl);
+      } catch (err) {
+        removeNode(typing);
+        appendMessage('assistant', `请求失败：${err.message}`);
+      } finally {
+        setSending(false);
+        inputEl.focus();
+      }
+    }
+
+    function openOverlay({ title, text, tip, feedback = '', showNext = false, showRestart = true }) {
+      overlayTitleEl().textContent = title;
+      overlayTextEl().textContent = text;
+      overlayTipEl().textContent = tip || '';
+      feedbackContentEl().textContent = feedback || '暂无反馈内容';
+      stageNextBtn().style.display = showNext ? 'inline-block' : 'none';
+      closeBtn().style.display = showNext ? 'none' : 'inline-block';
+      document.getElementById('restart-training').style.display = showRestart ? 'inline-block' : 'none';
+      overlayEl().style.display = 'flex';
+    }
+
+    function closeOverlay() {
+      overlayEl().style.display = 'none';
     }
 
     function getCurrentStageRemaining() {
@@ -478,604 +790,33 @@
       return 0;
     }
 
-    function isStartTrainingMessage(content) {
-      if (!content || typeof content !== 'string') return false;
-      const text = content.trim();
-      return text === '开始训练' || text === '开始训练。';
-    }
-
-    async function postJson(path, body) {
-      const res = await fetch(`${BACKEND_BASE}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {})
-      });
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || `请求失败: ${path}`);
-      }
-
-      return data;
-    }
-
-    async function createTrainingSessionIfNeeded() {
-      if (localSessionId) return;
-      const data = await postJson('/api/session/new', {});
-      localSessionId = data.localSessionId;
-      console.log('已创建本地训练会话', { localSessionId });
-    }
-
-    async function markTrainingStarted() {
-      if (!localSessionId) return;
-      await postJson('/api/session/start', {
-        localSessionId
-      });
-    }
-
-    function createIsolatedCozeUserId() {
-      const randomPart = (
-        window.crypto?.randomUUID?.() ||
-        `${Date.now()}_${Math.random().toString(36).slice(2)}`
-      ).replace(/[^a-zA-Z0-9_-]/g, '');
-
-      return `nursing_training_${randomPart}`.slice(0, 64);
-    }
-
-    function clearSdkHistoryOnPageLoad() {
-      try {
-        const removeKeys = [];
-
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (!key) continue;
-          const lower = key.toLowerCase();
-          if (
-            lower.includes('coze') ||
-            lower.includes('chat') ||
-            lower.includes('conversation') ||
-            lower.includes('message')
-          ) {
-            removeKeys.push(key);
-          }
-        }
-
-        removeKeys.forEach(key => localStorage.removeItem(key));
-
-        const removeSessionKeys = [];
-        for (let i = 0; i < sessionStorage.length; i++) {
-          const key = sessionStorage.key(i);
-          if (!key) continue;
-          const lower = key.toLowerCase();
-          if (
-            lower.includes('coze') ||
-            lower.includes('chat') ||
-            lower.includes('conversation') ||
-            lower.includes('message')
-          ) {
-            removeSessionKeys.push(key);
-          }
-        }
-
-        removeSessionKeys.forEach(key => sessionStorage.removeItem(key));
-      } catch (e) {
-        console.warn('清理 SDK 历史缓存失败:', e);
-      }
-    }
-
-    function clickSdkAddChatButton() {
-      const buttons = Array.from(document.querySelectorAll('button'));
-
-      const target = buttons.find(btn => {
-        const text = (btn.textContent || '').trim().toLowerCase();
-        const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
-        const title = (btn.getAttribute('title') || '').trim().toLowerCase();
-
-        return (
-          text.includes('add chat') ||
-          text.includes('new chat') ||
-          text.includes('clear context') ||
-          aria.includes('add chat') ||
-          aria.includes('new chat') ||
-          aria.includes('clear context') ||
-          title.includes('add chat') ||
-          title.includes('new chat') ||
-          title.includes('clear context')
-        );
-      });
-
-      if (target) {
-        target.click();
-        return true;
-      }
-      return false;
-    }
-
-    // 页面初始化前先清一次历史缓存
-    clearSdkHistoryOnPageLoad();
-
-    new CozeWebSDK.WebChatClient({
-      config: {
-        bot_id: COZE_BOT_ID,
-        isIframe: false,
-        userInfo: {
-          id: COZE_USER_ID,
-          nickname: 'training_user'
-        }
-      },
-      componentProps: {
-        title: '护理差错告知AI助手'
-      },
-      auth: {
-        type: 'token',
-        token: COZE_TOKEN,
-        onRefreshToken: async function () {
-          return COZE_TOKEN;
-        }
-      }
-    });
-
-    function voiceUnlockEl() {
-      return document.getElementById('voice-unlock');
-    }
-
-    function setVoiceUnlockVisible(visible) {
-      const el = voiceUnlockEl();
-      if (!el) return;
-      el.classList.add('is-hidden');
-    }
-
-    async function unlockVoiceAutoplay(event) {
-      if (event && event.isTrusted === false) return;
-
-      voiceAutoplayUnlocked = true;
-      setVoiceUnlockVisible(false);
-
-      try {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (AudioCtx) {
-          audioUnlockContext = audioUnlockContext || new AudioCtx();
-          if (audioUnlockContext.state !== 'running') {
-            await audioUnlockContext.resume();
-          }
-        }
-      } catch (err) {
-        console.warn('音频上下文解锁失败:', err);
-      }
-
-      try {
-      } catch (err) {
-        voiceAutoplayUnlocked = false;
-        setVoiceUnlockVisible(true);
-        showToast('请在浏览器地址栏左侧，为当前网页允许麦克风权限。', 5000);
-        console.warn('麦克风权限申请失败:', err);
-        return;
-      }
-
-      scheduleAutoPlayLatestAudio(80);
-    }
-
-    function installVoiceAutoplayUnlock() {
-      setVoiceUnlockVisible(true);
-
-      voiceUnlockEl()?.addEventListener('click', unlockVoiceAutoplay);
-
-      ['pointerdown', 'keydown', 'touchstart'].forEach(type => {
-        window.addEventListener(type, unlockVoiceAutoplay, {
-          capture: true,
-          passive: true
-        });
-      });
-    }
-
-    function allowSdkIframeAutoplay() {
-      document.querySelectorAll('iframe').forEach(frame => {
-        const src = frame.getAttribute('src') || '';
-        const cls = frame.className || '';
-        if (!src.includes('coze') && !String(cls).includes('coze')) return;
-
-        const allow = frame.getAttribute('allow') || '';
-        const needed = ['autoplay', 'microphone'];
-        const nextAllow = needed.reduce((value, item) => {
-          return value.includes(item) ? value : `${value}; ${item}`;
-        }, allow).replace(/^;\s*/, '');
-
-        frame.setAttribute('allow', nextAllow);
-      });
-    }
-
-    function stripThinkingText(text) {
-      return String(text || '')
-        .replace(/<think>[\s\S]*?<\/think>/gi, '')
-        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-        .replace(/思考过程[:：][\s\S]*?(?=(最终回答|回复[:：]|回答[:：]|$))/g, '')
-        .replace(/思考[:：][\s\S]*?(?=(最终回答|回复[:：]|回答[:：]|$))/g, '')
-        .replace(/Thought process[:：][\s\S]*?(?=(Final answer|Answer[:：]|$))/gi, '')
-        .replace(/Thinking[:：][\s\S]*?(?=(Final answer|Answer[:：]|$))/gi, '')
-        .trim();
-    }
-
-    function hideThinkingProcessUI() {
-      document.querySelectorAll('.e338c53da3cea5f5ba29').forEach(el => {
-        el.style.display = 'none';
-        el.style.visibility = 'hidden';
-      });
-
-      const hiddenMarkers = [
-        '思考过程',
-        '思考中',
-        '已深度思考',
-        '深度思考',
-        'Thought process',
-        'Thinking',
-        'Reasoning'
-      ];
-
-      Array.from(document.querySelectorAll('*')).forEach(el => {
-        if (el.closest('#status-panel, #timer-toast, #timeout-overlay')) return;
-
-        const attrText = [
-          el.className,
-          el.getAttribute?.('aria-label'),
-          el.getAttribute?.('title'),
-          el.getAttribute?.('data-testid')
-        ].join(' ').toLowerCase();
-
-        if (/(thinking|think|reasoning|thought|chain-of-thought|cot)/.test(attrText)) {
-          el.style.display = 'none';
-          el.style.visibility = 'hidden';
-          return;
-        }
-
-        const text = (el.textContent || '').trim();
-        if (!text) return;
-
-        const internalThoughtMarkers = [
-          '用户现在输入',
-          '按照之前的规则',
-          'recall slice',
-          '训练标识',
-          '等下检查',
-          '就输出这个',
-          '首先先把那个固定的开头',
-          '对，就这么来',
-          '组织内容'
-        ];
-        const directSpanCount = Array.from(el.children).filter(child => child.tagName === 'SPAN').length;
-        const matchedInternalMarkers = internalThoughtMarkers.filter(marker => text.includes(marker)).length;
-        if (directSpanCount >= 2 && matchedInternalMarkers >= 2) {
-          el.style.display = 'none';
-          el.style.visibility = 'hidden';
-          return;
-        }
-
-        const isMarkerOnly = hiddenMarkers.some(marker => text === marker || text.startsWith(`${marker}：`) || text.startsWith(`${marker}:`));
-        if (!isMarkerOnly) return;
-
-        const target =
-          el.closest('details, [class*="collapse"], [class*="panel"], [class*="card"], [class*="reason"], [class*="think"]') ||
-          el.parentElement;
-
-        if (target && !target.matches('body')) {
-          target.style.display = 'none';
-          target.style.visibility = 'hidden';
-        }
-      });
-
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      const textNodes = [];
-      while (walker.nextNode()) {
-        textNodes.push(walker.currentNode);
-      }
-
-      textNodes.forEach(node => {
-        const parent = node.parentElement;
-        if (!parent || parent.closest('#status-panel, #timer-toast, #timeout-overlay')) return;
-        const cleaned = stripThinkingText(node.nodeValue);
-        if (cleaned !== String(node.nodeValue || '').trim()) {
-          node.nodeValue = cleaned ? `${cleaned} ` : '';
-        }
-      });
-    }
-
-    installVoiceAutoplayUnlock();
-
-    function applyVoiceOnlyUI() {
-      hideThinkingProcessUI();
-
-      document.querySelectorAll(
-        'textarea, input[type="text"], input:not([type]), [contenteditable="true"]'
-      ).forEach(el => {
-        el.style.display = 'none';
-        el.style.visibility = 'hidden';
-        el.style.pointerEvents = 'none';
-      });
-
-      const iconButtons = document.querySelectorAll(
-        'button.coze-chat-sdk-semi-button-with-icon-only'
-      );
-      if (iconButtons.length > 7) {
-        iconButtons[7].style.display = 'none';
-      }
-
-      Array.from(document.querySelectorAll('*')).forEach(el => {
-        const txt = (el.textContent || '').trim();
-        if (
-          el.children.length === 0 &&
-          (txt === 'Press here or the space key to speak' || txt === 'Click to activate input')
-        ) {
-          el.textContent = '按住此处说话';
-          el.style.position = 'relative';
-          el.style.top = '-3px';
-          el.style.whiteSpace = 'nowrap';
-        }
-      });
-    }
-    
-    setTimeout(applyVoiceOnlyUI, 1200);
-    setTimeout(applyVoiceOnlyUI, 2500);
-    setTimeout(applyVoiceOnlyUI, 4000);
-    setTimeout(applyVoiceOnlyUI, 6000);
-
-    function autoPlayLatestAudio() {
-      // 只在训练开始后执行（避免未开始前误触）
-      if (!timerStarted) return;
-
-      // 获取所有 icon-only 按钮
-      const allBtns = document.querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only');
-      
-      // 筛选出位于消息气泡内、且尚未自动播放过的按钮
-      const playBtns = Array.from(allBtns).filter(btn => {
-        // 已经在之前的循环中点击过，跳过
-        if (btn.dataset.autoPlayed === 'true') return false;
-        // 确认它在消息区域内（防止点到输入框的按钮）
-        return btn.closest('[class*="message"]') || btn.closest('[class*="chat"]');
-      });
-
-      if (playBtns.length === 0) return;
-
-      // 取最后一个（即最新消息中的按钮）
-      const latestBtn = playBtns[playBtns.length - 1];
-      latestBtn.dataset.autoPlayed = 'true';
-
-      // 延迟 200ms 确保音频元素加载完毕
-      setTimeout(() => {
-        try {
-          latestBtn.click();
-        } catch (e) {
-          // 忽略可能的错误（如按钮被移除）
-        }
-      }, 200);
-    }
-
-    function isLikelyAudioPlayButton(btn) {
-      const messageContainer = getMessageContainer(btn);
-      if (!messageContainer || messageContainer.dataset.audioAutoPlayed === 'true') return false;
-
-      const text = [
-        btn.textContent,
-        btn.getAttribute('aria-label'),
-        btn.getAttribute('title')
-      ].join(' ').toLowerCase();
-
-      const denyWords = [
-        'send', 'mic', 'microphone', 'input', 'add chat', 'new chat',
-        'clear context', 'close', 'more', 'copy', '发送', '麦克风', '输入',
-        '新建', '清除', '关闭', '更多', '复制'
-      ];
-      if (denyWords.some(word => text.includes(word))) return false;
-
-      const allowWords = [
-        'play', 'listen', 'read aloud', 'audio', 'speaker', 'voice',
-        '播放', '朗读', '收听', '语音', '声音'
-      ];
-      if (allowWords.some(word => text.includes(word))) return true;
-
-      return Boolean(!btn.closest('form') && !btn.closest('[class*="input"]'));
-    }
-
-    function getMessageContainer(btn) {
-      return btn.closest('[class*="message"], [data-testid*="message"], [class*="bubble"]');
-    }
-
-    function pickLatestAssistantAudioButton(playBtns) {
-      const messages = [];
-      playBtns.forEach(btn => {
-        const message = getMessageContainer(btn);
-        if (message && messages[messages.length - 1] !== message) {
-          messages.push(message);
-        }
-      });
-
-      const latestMessage = messages[messages.length - 1];
-      if (!latestMessage) return null;
-
-      const messageButtons = Array.from(
-        latestMessage.querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only')
-      ).filter(btn => isLikelyAudioPlayButton(btn));
-
-      return messageButtons[0] || null;
-    }
-
-    function buildAudioMessageKey(message) {
-      const text = String(message?.innerText || message?.textContent || '')
-        .replace(/\s+/g, ' ')
-        .replace(/Powered by coze.*$/i, '')
-        .trim();
-
-      if (text.length < 16) return '';
-      return text.slice(0, 180);
-    }
-
-    function markMessageButtonsPlayed(message) {
-      if (!message) return;
-      message.dataset.audioAutoPlayed = 'true';
-      message
-        .querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only')
-        .forEach(btn => {
-          btn.dataset.autoPlayed = 'true';
-        });
-    }
-
-    function scheduleAutoPlayLatestAudio(delay = 260) {
-      clearTimeout(autoPlayRetryTimer);
-      autoPlayRetryTimer = setTimeout(autoPlayLatestAudio, delay);
-    }
-
-    function autoPlayLatestAudio() {
-      if (!timerStarted) return;
-      allowSdkIframeAutoplay();
-
-      if (!voiceAutoplayUnlocked) {
-        setVoiceUnlockVisible(true);
-        return;
-      }
-
-      const allBtns = document.querySelectorAll('button.coze-chat-sdk-semi-button-with-icon-only');
-      const playBtns = Array.from(allBtns).filter(btn => {
-        if (btn.dataset.autoPlayed === 'true') return false;
-        return isLikelyAudioPlayButton(btn);
-      });
-
-      if (playBtns.length === 0) return;
-
-      const latestBtn = pickLatestAssistantAudioButton(playBtns);
-      if (!latestBtn) return;
-
-      const latestMessage = getMessageContainer(latestBtn);
-      const messageKey = buildAudioMessageKey(latestMessage);
-      if (!messageKey) return;
-
-      const now = Date.now();
-      if (
-        playedAudioMessageKeys.has(messageKey) ||
-        pendingAudioMessageKey === messageKey ||
-        now - lastAudioPlayAt < 1200
-      ) {
-        markMessageButtonsPlayed(latestMessage);
-        return;
-      }
-
-      pendingAudioMessageKey = messageKey;
-      playedAudioMessageKeys.add(messageKey);
-      lastAudioPlayAt = now;
-      latestBtn.dataset.autoPlayed = 'true';
-      markMessageButtonsPlayed(latestMessage);
-
-      setTimeout(() => {
-        try {
-          latestBtn.click();
-          pendingAudioMessageKey = '';
-        } catch (e) {
-          latestBtn.dataset.autoPlayed = 'false';
-          pendingAudioMessageKey = '';
-          console.warn('自动播放点击失败:', e);
-        }
-      }, 260);
-    }
-
-    const observer = new MutationObserver(() => {
-      applyVoiceOnlyUI();
-      autoPlayLatestAudio();  // 新增自动播放
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-
-    // 页面打开后再自动尝试点一次 Add chat / New chat
-    window.addEventListener('load', () => {
-      setTimeout(() => {
-        const clicked = clickSdkAddChatButton();
-        if (clicked) {
-          showToast('已自动清除上次聊天记录。', 2200);
-        }
-      }, 1400);
-    });
-
-    (function installAddChatResetWatcher() {
-      let lastContextClearedCount = 0;
-
-      function checkContextCleared() {
-        const nodes = Array.from(document.querySelectorAll('*')).filter(el => {
-          if (el.children.length > 0) return false;
-          const txt = (el.textContent || '').trim();
-          return txt === 'Context cleared';
-        });
-
-        if (nodes.length > lastContextClearedCount) {
-          lastContextClearedCount = nodes.length;
-          hardResetTrainingStateOnly();
-        }
-      }
-
-      const mo = new MutationObserver(() => {
-        checkContextCleared();
-      });
-
-      mo.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-
-      setTimeout(checkContextCleared, 1000);
-    })();
-
-    function startTimer() {
-      if (timerStarted) return;
-
-      timerStarted = true;
-      currentStage = 1;
-      updateTimerUI();
-      updateStageUI();
-
-      timerInterval = setInterval(tick, 1000);
-      // 提前激活音频上下文（保证后续自动播放不被拦截）
-      if (!voiceAutoplayUnlocked) {
-        setVoiceUnlockVisible(true);
-      } else {
-        scheduleAutoPlayLatestAudio(80);
-      }
-    }
-
     async function handleStage1End() {
       if (stage1FeedbackLocked) return;
       stage1FeedbackLocked = true;
       stage1Ended = true;
-
       stopTimer();
-      showToast('第一阶段已到时，正在整理对话并生成反馈，请稍候...', 5000);
+      showToast('第一阶段已到时，正在生成反馈。');
 
       try {
-        const transcript = getStageTranscript(1);
-
         const data = await postJson('/api/session/stage1-timeup', {
           localSessionId,
-          transcript
+          transcript: getStageTranscript(1)
         });
-
         currentStage = 2;
-
         openOverlay({
           title: '第一阶段反馈',
-          text: '第一阶段已结束，下面是您的最新反馈。现在即将开始下一阶段的训练，如果您已做好准备，请输入“进入第二阶段”',
-          tip: '关闭弹窗后，请先在聊天中输入“进入第二阶段”，再开始第二阶段训练。',
+          text: '第一阶段已结束。关闭后请输入“进入第二阶段”，继续案例二训练。',
+          tip: '点击进入下一阶段后，计时会继续。',
           feedback: data.answer || '未获取到反馈文本',
-          showNext: true,
-          showRestart: true,
-          lock: true
+          showNext: true
         });
       } catch (err) {
         openOverlay({
-          title: '第一阶段自动反馈失败',
-          text: '后端没有成功拿到第一阶段反馈，请检查后端配置。',
-          tip: err.message || '未知错误',
-          feedback: err.stack || err.message || '未知错误',
-          showNext: true,
-          showRestart: true,
-          lock: true
+          title: '第一阶段反馈失败',
+          text: '后端没有成功生成第一阶段反馈。',
+          tip: err.message,
+          feedback: err.stack || err.message,
+          showNext: true
         });
       }
     }
@@ -1085,46 +826,36 @@
       finalFeedbackLocked = true;
       finalEnded = true;
       currentStage = 3;
-
       stopTimer();
       totalSeconds = 0;
       updateTimerUI();
       updateStageUI();
-
-      showToast('训练已结束，正在整理全程对话并生成最终反馈，请稍候...', 5000);
+      showToast('训练已结束，正在生成最终反馈。');
 
       try {
-        const transcript = getAllTranscript();
-
         const data = await postJson('/api/session/final-timeup', {
           localSessionId,
-          transcript
+          transcript: getStageTranscript(2)
         });
-
         openOverlay({
           title: '训练结束反馈',
           text: '本次训练已结束，系统已生成最终反馈报告。',
-          tip: '反馈显示在弹窗中，不要求显示在聊天气泡里。',
           feedback: data.answer || '未获取到反馈文本',
-          showNext: false,
-          showRestart: true,
-          lock: true
+          showNext: false
         });
       } catch (err) {
         openOverlay({
-          title: '最终自动反馈失败',
-          text: '后端没有成功拿到最终反馈，请检查后端日志。',
-          tip: err.message || '未知错误',
-          feedback: err.stack || err.message || '未知错误',
-          showNext: false,
-          showRestart: true,
-          lock: true
+          title: '最终反馈失败',
+          text: '后端没有成功生成最终反馈。',
+          tip: err.message,
+          feedback: err.stack || err.message,
+          showNext: false
         });
       }
     }
 
     function tick() {
-      totalSeconds--;
+      totalSeconds -= 1;
       if (totalSeconds < 0) totalSeconds = 0;
 
       if (totalSeconds > STAGE_SECONDS) currentStage = 1;
@@ -1132,15 +863,13 @@
       else currentStage = 3;
 
       const stageRemaining = getCurrentStageRemaining();
-
       if (currentStage === 1 && stageRemaining <= REMIND_SECONDS && !warnedStage1) {
         warnedStage1 = true;
-        showToast(`第一阶段还剩 ${Math.ceil(REMIND_SECONDS / 60)} 分钟，请准备结束当前轮对话。`, 4500);
+        showToast(`第一阶段还剩 ${Math.ceil(REMIND_SECONDS / 60)} 分钟，请准备结束当前轮对话。`);
       }
-
       if (currentStage === 2 && stageRemaining <= REMIND_SECONDS && !warnedStage2) {
         warnedStage2 = true;
-        showToast(`第二阶段还剩 ${Math.ceil(REMIND_SECONDS / 60)} 分钟，请准备结束当前轮对话。`, 4500);
+        showToast(`第二阶段还剩 ${Math.ceil(REMIND_SECONDS / 60)} 分钟，请准备结束当前轮对话。`);
       }
 
       updateTimerUI();
@@ -1150,116 +879,225 @@
         handleStage1End();
         return;
       }
-
       if (!finalEnded && totalSeconds === 0) {
         handleFinalEnd();
       }
     }
 
-    updateTimerUI();
-    updateStageUI();
+    function autoResizeInput() {
+      inputEl.style.height = 'auto';
+      inputEl.style.height = `${Math.min(inputEl.scrollHeight, 132)}px`;
+    }
 
-    (function installStartTrainingAndLogHook() {
-      const oldFetch = window.fetch;
+    async function ensureMicrophonePermission() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('当前浏览器不支持麦克风采集，请使用最新版 Edge 或 Chrome。');
+      }
 
-      window.fetch = function (...args) {
-        try {
-          const [url, options] = args;
-          const urlStr = typeof url === 'string' ? url : (url?.url || '');
-
-          if (
-            urlStr.includes('/v3/chat') &&
-            options &&
-            typeof options.body === 'string'
-          ) {
-            const bodyObj = JSON.parse(options.body);
-            const msgs = bodyObj?.additional_messages || [];
-            const lastMsg = msgs[msgs.length - 1] || {};
-            const userContent = lastMsg?.content || '';
-
-            currentStageAtSend = currentStage || 1;
-
-            if (userContent.trim()) {
-              pushChatLog('user', normalizeText(userContent), currentStageAtSend);
-            }
-
-            if (isStartTrainingMessage(userContent) && !timerStarted) {
-              Promise.resolve()
-                .then(() => createTrainingSessionIfNeeded())
-                .then(() => markTrainingStarted())
-                .then(() => {
-                  startTimer();
-                  showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。`, 4500);
-                })
-                .catch(err => {
-                  console.error('开始训练识别失败:', err);
-                });
-            }
-          }
-        } catch (err) {
-          console.error('开始训练识别/记录失败:', err);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+      } catch (err) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          throw new Error('麦克风权限被拒绝。请点击地址栏左侧的权限图标，允许此网站使用麦克风，然后刷新页面。');
         }
+        if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          throw new Error('没有检测到可用麦克风，请检查设备连接。');
+        }
+        if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+          throw new Error('麦克风正被其他程序占用，请关闭占用麦克风的软件后重试。');
+        }
+        if (err.name === 'SecurityError') {
+          throw new Error('当前页面不允许访问麦克风，请用 http://127.0.0.1 或 HTTPS 打开页面。');
+        }
+        throw new Error(`麦克风初始化失败：${err.message || err.name || '未知错误'}`);
+      }
+    }
 
-        const responsePromise = oldFetch.apply(this, args);
-
-        responsePromise.then(async (response) => {
-          try {
-            const [url] = args;
-            const urlStr = typeof url === 'string' ? url : (url?.url || '');
-
-            if (!urlStr.includes('/v3/chat')) return;
-
-            const cloned = response.clone();
-            const text = await cloned.text();
-
-            const matches = [...text.matchAll(/"content"\s*:\s*"([^"]*)"/g)];
-            if (matches.length > 0) {
-              const last = matches[matches.length - 1][1]
-                .replace(/\\"/g, '"')
-                .replace(/\\n/g, '\n')
-                .trim();
-
-              if (last) {
-                pushChatLog('assistant', normalizeText(last), currentStageAtSend);
-              }
-            }
-          } catch (e) {
-            console.warn('记录 assistant 回复失败:', e);
-          }
-        });
-
-        return responsePromise;
+    function getSpeechRecognitionErrorMessage(error) {
+      const map = {
+        'not-allowed': '语音识别权限被拒绝。请在地址栏权限设置中允许麦克风，并确认 Windows 设置允许浏览器访问麦克风。',
+        'service-not-allowed': '浏览器语音识别服务不可用，请确认网络可用，或换用最新版 Edge/Chrome。',
+        'audio-capture': '未能采集到麦克风声音，请检查麦克风设备和系统权限。',
+        'network': '语音识别网络服务连接失败，请检查网络后重试。',
+        'no-speech': '没有检测到说话声音，请靠近麦克风后再试一次。',
+        'aborted': '语音输入已取消。',
+        'language-not-supported': '当前浏览器不支持中文语音识别。'
       };
-    })();
+      return map[error] || `语音输入失败：${error || '未知错误'}`;
+    }
 
-    document.getElementById('close-timeout')?.addEventListener('click', () => {
-      closeOverlay(true);
+    function setupSpeechRecognition() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        micBtn.disabled = true;
+        micBtn.title = '当前浏览器不支持语音输入';
+        voiceStatusEl.textContent = '当前浏览器不支持语音输入';
+        return;
+      }
+
+      recognition = new SpeechRecognition();
+      recognition.lang = 'zh-CN';
+      recognition.interimResults = true;
+      recognition.continuous = true;
+
+      recognition.onstart = () => {
+        recognizing = true;
+        recognitionHadError = false;
+        finalVoiceText = '';
+        recognitionStartCanceled = false;
+        micBtn.classList.add('active');
+        micBtn.setAttribute('aria-label', '松开发送语音');
+        voiceStatusEl.textContent = '正在聆听，松开发送';
+      };
+      recognition.onend = async () => {
+        recognizing = false;
+        micBtn.classList.remove('active');
+        micBtn.setAttribute('aria-label', '按住语音输入');
+        voiceStatusEl.textContent = sending ? '正在等待助手回复...' : '按住麦克风开始说话，松开发送';
+        const text = normalizeText(finalVoiceText || inputEl.value);
+        finalVoiceText = '';
+        inputEl.value = '';
+        const shouldSend = shouldSendVoiceOnEnd;
+        shouldSendVoiceOnEnd = false;
+        if (!recognitionHadError && shouldSend && text && !sending) {
+          await sendMessage(text);
+        } else if (!recognitionHadError && shouldSend && !text && !sending) {
+          showToast('没有识别到语音，请再试一次。');
+        }
+      };
+      recognition.onerror = event => {
+        recognitionHadError = true;
+        const message = getSpeechRecognitionErrorMessage(event.error);
+        isPressingMic = false;
+        shouldSendVoiceOnEnd = false;
+        voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+        showToast(message, 7000);
+      };
+      recognition.onresult = event => {
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalVoiceText += transcript;
+          } else {
+            interimText += transcript;
+          }
+        }
+        const preview = normalizeText(finalVoiceText || interimText);
+        inputEl.value = preview;
+        if (preview) {
+          voiceStatusEl.textContent = `识别中：${preview}`;
+        }
+      };
+    }
+
+    async function startPressToTalk(event) {
+      event.preventDefault();
+      if (!recognition || sending || recognizing || isPressingMic) return;
+
+      isPressingMic = true;
+      shouldSendVoiceOnEnd = false;
+      recognitionStartCanceled = false;
+      finalVoiceText = '';
+      inputEl.value = '';
+
+      if (event.pointerId !== undefined && micBtn.setPointerCapture) {
+        try {
+          micBtn.setPointerCapture(event.pointerId);
+        } catch (err) {
+        }
+      }
+
+      try {
+        voiceStatusEl.textContent = '正在请求麦克风权限...';
+        await ensureMicrophonePermission();
+        if (!isPressingMic) {
+          recognitionStartCanceled = true;
+          voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+          return;
+        }
+        recognition.start();
+      } catch (err) {
+        isPressingMic = false;
+        shouldSendVoiceOnEnd = false;
+        voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+        showToast(err.message, 8000);
+      }
+    }
+
+    function finishPressToTalk(event) {
+      event.preventDefault();
+      if (!recognition || sending) return;
+      if (event.pointerId !== undefined && micBtn.releasePointerCapture) {
+        try {
+          micBtn.releasePointerCapture(event.pointerId);
+        } catch (err) {
+        }
+      }
+
+      isPressingMic = false;
+      shouldSendVoiceOnEnd = true;
+      if (recognizing) {
+        voiceStatusEl.textContent = '正在发送语音...';
+        recognition.stop();
+      } else if (recognitionStartCanceled) {
+        shouldSendVoiceOnEnd = false;
+        recognitionStartCanceled = false;
+        voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+      }
+    }
+
+    formEl.addEventListener('submit', event => {
+      event.preventDefault();
     });
 
-    document.getElementById('stage-next')?.addEventListener('click', () => {
-      closeOverlay(true);
+    micBtn.addEventListener('pointerdown', startPressToTalk);
+    micBtn.addEventListener('pointerup', finishPressToTalk);
+    micBtn.addEventListener('pointercancel', finishPressToTalk);
+    micBtn.addEventListener('pointerleave', event => {
+      if (isPressingMic) finishPressToTalk(event);
+    });
+    micBtn.addEventListener('contextmenu', event => event.preventDefault());
+
+    document.getElementById('close-timeout').addEventListener('click', closeOverlay);
+    document.getElementById('stage-next').addEventListener('click', () => {
+      closeOverlay();
       currentStage = 2;
       updateStageUI();
-
       if (!finalEnded && !timerInterval && totalSeconds > 0) {
         timerInterval = setInterval(tick, 1000);
       }
-
-      showToast('已切换到第二阶段。请在聊天中输入“进入第二阶段”，然后继续训练。', 4000);
+      showToast('已进入第二阶段。请在对话中输入“进入第二阶段”，然后继续训练。');
     });
-
-    document.getElementById('restart-training')?.addEventListener('click', async () => {
+    document.getElementById('restart-training').addEventListener('click', async () => {
       try {
-        if (localSessionId) {
-          await postJson('/api/session/reset', { localSessionId });
-        }
+        if (localSessionId) await postJson('/api/session/reset', { localSessionId });
       } catch (err) {
-        console.warn('reset session 失败:', err);
       }
-
-      resetLocalState();
       location.reload();
     });
+
+    async function bootstrap() {
+      updateTimerUI();
+      updateStageUI();
+      setupSpeechRecognition();
+      setSending(true);
+      try {
+        await createTrainingSession();
+        appendMessage(
+          'assistant',
+          '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。'
+        );
+      } catch (err) {
+        appendMessage('assistant', `创建新会话失败：${err.message}`);
+      } finally {
+        setSending(false);
+        inputEl.focus();
+      }
+    }
+
+    bootstrap();
   </script>
 </body>
 </html>
