@@ -16,6 +16,8 @@ const BOT_ID = process.env.BOT_ID;
 const TENCENT_SECRET_ID = process.env.TENCENT_SECRET_ID;
 const TENCENT_SECRET_KEY = process.env.TENCENT_SECRET_KEY;
 const TENCENT_TTS_REGION = process.env.TENCENT_TTS_REGION || 'ap-guangzhou';
+const TENCENT_ASR_REGION = process.env.TENCENT_ASR_REGION || TENCENT_TTS_REGION;
+const TENCENT_ASR_ENGINE = process.env.TENCENT_ASR_ENGINE || '16k_zh';
 const TENCENT_TTS_VOICE_TYPE = Number(process.env.TENCENT_TTS_VOICE_TYPE || 501002);
 const TENCENT_TTS_CODEC = process.env.TENCENT_TTS_CODEC || 'mp3';
 const TENCENT_TTS_SAMPLE_RATE = Number(process.env.TENCENT_TTS_SAMPLE_RATE || 24000);
@@ -27,6 +29,7 @@ app.use('/audio', express.static(AUDIO_DIR));
 
 const sessions = new Map();
 const TtsClient = tencentcloud.tts.v20190823.Client;
+const AsrClient = tencentcloud.asr.v20190614.Client;
 const ttsClient = TENCENT_SECRET_ID && TENCENT_SECRET_KEY
   ? new TtsClient({
       credential: {
@@ -37,6 +40,20 @@ const ttsClient = TENCENT_SECRET_ID && TENCENT_SECRET_KEY
       profile: {
         httpProfile: {
           endpoint: 'tts.tencentcloudapi.com'
+        }
+      }
+    })
+  : null;
+const asrClient = TENCENT_SECRET_ID && TENCENT_SECRET_KEY
+  ? new AsrClient({
+      credential: {
+        secretId: TENCENT_SECRET_ID,
+        secretKey: TENCENT_SECRET_KEY
+      },
+      region: TENCENT_ASR_REGION,
+      profile: {
+        httpProfile: {
+          endpoint: 'asr.tencentcloudapi.com'
         }
       }
     })
@@ -169,6 +186,52 @@ async function synthesizeSpeech(text) {
   const filePath = path.join(AUDIO_DIR, filename);
   await fs.writeFile(filePath, Buffer.concat(buffers));
   return `/audio/${filename}`;
+}
+
+function normalizeBase64Audio(audioBase64) {
+  const raw = String(audioBase64 || '');
+  const commaIndex = raw.indexOf(',');
+  return commaIndex >= 0 ? raw.slice(commaIndex + 1) : raw;
+}
+
+async function recognizeSpeech({ audioBase64, mimeType }) {
+  if (!asrClient) {
+    throw new Error('后端未配置腾讯云语音识别，请配置 TENCENT_SECRET_ID / TENCENT_SECRET_KEY');
+  }
+
+  const data = normalizeBase64Audio(audioBase64);
+  if (!data) throw new Error('audioBase64 is required');
+
+  const audioBuffer = Buffer.from(data, 'base64');
+  if (!audioBuffer.length) throw new Error('音频数据为空');
+  if (audioBuffer.length > 3 * 1024 * 1024) {
+    throw new Error('单次语音不能超过 60 秒或 3MB，请缩短后重试');
+  }
+
+  const type = String(mimeType || '').toLowerCase();
+  const voiceFormat =
+    type.includes('wav') ? 'wav' :
+    type.includes('mp3') ? 'mp3' :
+    type.includes('m4a') || type.includes('mp4') ? 'm4a' :
+    type.includes('aac') ? 'aac' :
+    'wav';
+
+  const result = await asrClient.SentenceRecognition({
+    EngSerViceType: TENCENT_ASR_ENGINE,
+    SourceType: 1,
+    VoiceFormat: voiceFormat,
+    ProjectId: 0,
+    SubServiceType: 2,
+    UsrAudioKey: `voice_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+    Data: data,
+    DataLen: audioBuffer.length,
+    FilterDirty: 0,
+    FilterModal: 0,
+    FilterPunc: 0,
+    ConvertNumMode: 1
+  });
+
+  return String(result?.Result || '').trim();
 }
 
 async function cleanupOldAudioFiles(maxAgeMs = 24 * 60 * 60 * 1000) {
@@ -508,9 +571,27 @@ app.get('/api/health', (req, res) => {
     config: {
       cozePat: Boolean(COZE_PAT),
       botId: Boolean(BOT_ID),
-      tencentTts: Boolean(ttsClient)
+      tencentTts: Boolean(ttsClient),
+      tencentAsr: Boolean(asrClient)
     }
   });
+});
+
+app.post('/api/speech/recognize', async (req, res) => {
+  try {
+    const { audioBase64, mimeType } = req.body || {};
+    const text = await recognizeSpeech({ audioBase64, mimeType });
+    res.json({
+      ok: true,
+      text
+    });
+  } catch (err) {
+    console.error('/api/speech/recognize error:', err);
+    res.status(err.statusCode || 500).json({
+      ok: false,
+      error: err.message
+    });
+  }
 });
 
 app.all('/api/coze/proxy', async (req, res) => {

@@ -258,6 +258,35 @@
       white-space: nowrap;
     }
 
+    .voice-cancel {
+      display: none;
+      min-width: 124px;
+      height: 38px;
+      padding: 0 18px;
+      border-radius: 999px;
+      border: 1px solid #fecaca;
+      background: #fff1f2;
+      color: #b42318;
+      font-size: 14px;
+      font-weight: 700;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 22px rgba(180, 35, 24, 0.12);
+      user-select: none;
+      touch-action: none;
+    }
+
+    .voice-cancel.show {
+      display: flex;
+    }
+
+    .voice-cancel.active {
+      background: #b42318;
+      border-color: #b42318;
+      color: #fff;
+      transform: scale(1.03);
+    }
+
     @keyframes pulse-ring {
       0% {
         transform: scale(0.86);
@@ -438,6 +467,7 @@
     <section id="messages" class="messages" aria-live="polite"></section>
 
     <form id="composer" class="composer">
+      <div id="voice-cancel" class="voice-cancel">上滑取消</div>
       <button id="mic-btn" class="icon-btn" type="button" title="按住说话，松开发送" aria-label="按住语音输入"></button>
       <div id="voice-status" class="voice-status">按住麦克风开始说话，松开发送</div>
       <textarea id="message-input" rows="1" aria-hidden="true" tabindex="-1"></textarea>
@@ -448,9 +478,12 @@
   <audio id="assistant-audio" preload="auto"></audio>
 
   <script>
-    // const BACKEND_BASE = 'http://localhost:3000';
-    const BACKEND_BASE = 'https://chat-production-b4be.up.railway.app';
-    const TEST_MODE = false;
+    const LOCAL_BACKEND_BASE = 'http://localhost:3000';
+    const REMOTE_BACKEND_BASE = 'https://chat-production-b4be.up.railway.app';
+    const BACKEND_BASE = ['localhost', '127.0.0.1'].includes(location.hostname)
+      ? LOCAL_BACKEND_BASE
+      : REMOTE_BACKEND_BASE;
+    const TEST_MODE = true;
     const TEST_STAGE_MINUTES = 5;
     const FORMAL_STAGE_MINUTES = 30;
 
@@ -475,6 +508,13 @@
     let isPressingMic = false;
     let shouldSendVoiceOnEnd = false;
     let recognitionStartCanceled = false;
+    let stoppingVoice = false;
+    let speechErrorMessage = '';
+    let voiceCanceling = false;
+    let audioUnlocked = false;
+    let pendingAudioUrl = '';
+    let audioRetryTimer = null;
+    const USE_BROWSER_SPEECH_RECOGNITION = true;
 
     const STAGE_MINUTES = TEST_MODE ? TEST_STAGE_MINUTES : FORMAL_STAGE_MINUTES;
     const TOTAL_SECONDS = STAGE_MINUTES * 60 * 2;
@@ -486,8 +526,10 @@
     const inputEl = document.getElementById('message-input');
     const sendBtn = document.getElementById('send-btn');
     const micBtn = document.getElementById('mic-btn');
+    const voiceCancelEl = document.getElementById('voice-cancel');
     const voiceStatusEl = document.getElementById('voice-status');
     const audioEl = document.getElementById('assistant-audio');
+    const isMobileBrowser = /Android|iPhone|iPad|iPod|Mobile|MicroMessenger/i.test(navigator.userAgent);
     const timerEl = () => document.getElementById('training-timer');
     const toastEl = () => document.getElementById('timer-toast');
     const overlayEl = () => document.getElementById('timeout-overlay');
@@ -515,6 +557,28 @@
       el._timer = setTimeout(() => {
         el.style.display = 'none';
       }, duration);
+    }
+
+    async function unlockAudioPlayback() {
+      if (audioUnlocked) return true;
+      try {
+        audioEl.muted = true;
+        audioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAwF0AAIC7AAACABAAZGF0YQAAAAA=';
+        await audioEl.play();
+        audioEl.pause();
+        audioEl.currentTime = 0;
+        audioEl.muted = false;
+        audioUnlocked = true;
+        if (pendingAudioUrl) {
+          const audioUrl = pendingAudioUrl;
+          pendingAudioUrl = '';
+          playAssistantAudio(audioUrl);
+        }
+        return true;
+      } catch (err) {
+        audioEl.muted = false;
+        return false;
+      }
     }
 
     function updateTimerUI() {
@@ -661,6 +725,55 @@
       return text === '开始训练';
     }
 
+    function normalizeTrainingCommand(text) {
+      const raw = normalizeText(text);
+      const compact = raw.replace(/[。.!！？，,、\s]/g, '');
+      if (!compact) return raw;
+
+      const startAliases = [
+        '开始训练',
+        '开始训炼',
+        '开始练习',
+        '开启训练',
+        '开始',
+        '开训',
+        '训练开始',
+        '爱训',
+        '爱情',
+        '开始进行'
+      ];
+      if (startAliases.some(item => compact === item || compact.includes(item))) {
+        return '开始训练';
+      }
+
+      const continueAliases = [
+        '继续当前训练',
+        '继续训练',
+        '当前训练',
+        '继续当前',
+        '继续刚才',
+        '接着训练',
+        '接着刚才',
+        '继续对话'
+      ];
+      if (continueAliases.some(item => compact === item || compact.includes(item))) {
+        return '继续当前训练';
+      }
+
+      const stage2Aliases = [
+        '进入第二阶段',
+        '第二阶段',
+        '进第二阶段',
+        '下一阶段',
+        '进入下一阶段'
+      ];
+      if (stage2Aliases.some(item => compact === item || compact.includes(item))) {
+        return '进入第二阶段';
+      }
+
+      return raw;
+    }
+
     async function createTrainingSession() {
       const data = await postJson('/api/session/new', {});
       localSessionId = data.localSessionId;
@@ -697,8 +810,26 @@
       if (!audioUrl) return;
       audioEl.src = audioUrl.startsWith('http') ? audioUrl : `${BACKEND_BASE}${audioUrl}`;
       audioEl.play().catch(() => {
-        showToast('浏览器阻止了自动播放，请点击页面后继续训练。');
+        pendingAudioUrl = audioUrl;
+        audioUnlocked = false;
+        clearTimeout(audioRetryTimer);
+        audioRetryTimer = setTimeout(() => {
+          if (pendingAudioUrl && audioUnlocked) {
+            const nextAudioUrl = pendingAudioUrl;
+            pendingAudioUrl = '';
+            playAssistantAudio(nextAudioUrl);
+          }
+        }, 300);
+        voiceStatusEl.textContent = '播报将在下一次按麦克风后自动继续';
       });
+    }
+
+    function stopAssistantAudio() {
+      if (!audioEl.paused) {
+        audioEl.pause();
+      }
+      audioEl.removeAttribute('src');
+      audioEl.load();
     }
 
     function isMissingSessionError(err) {
@@ -936,9 +1067,15 @@
     function setupSpeechRecognition() {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
-        micBtn.disabled = true;
-        micBtn.title = '当前浏览器不支持语音输入';
-        voiceStatusEl.textContent = '当前浏览器不支持语音输入';
+        if (!navigator.mediaDevices?.getUserMedia) {
+          micBtn.disabled = true;
+          micBtn.title = '当前浏览器不支持语音输入';
+          voiceStatusEl.textContent = '当前浏览器不支持语音输入';
+        } else {
+          recognition = null;
+          micBtn.title = '按住说话，松开发送';
+          voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+        }
         return;
       }
 
@@ -952,6 +1089,7 @@
         recognitionHadError = false;
         finalVoiceText = '';
         recognitionStartCanceled = false;
+        speechErrorMessage = '';
         micBtn.classList.add('active');
         micBtn.setAttribute('aria-label', '松开发送语音');
         voiceStatusEl.textContent = '正在聆听，松开发送';
@@ -966,19 +1104,15 @@
         inputEl.value = '';
         const shouldSend = shouldSendVoiceOnEnd;
         shouldSendVoiceOnEnd = false;
-        if (!recognitionHadError && shouldSend && text && !sending) {
-          await sendMessage(text);
-        } else if (!recognitionHadError && shouldSend && !text && !sending) {
-          showToast('没有识别到语音，请再试一次。');
+        if (shouldSend && !sending) {
+          await completeVoiceInput(text);
         }
       };
       recognition.onerror = event => {
         recognitionHadError = true;
-        const message = getSpeechRecognitionErrorMessage(event.error);
+        speechErrorMessage = getSpeechRecognitionErrorMessage(event.error);
         isPressingMic = false;
-        shouldSendVoiceOnEnd = false;
         voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
-        showToast(message, 7000);
       };
       recognition.onresult = event => {
         let interimText = '';
@@ -998,15 +1132,95 @@
       };
     }
 
-    async function startPressToTalk(event) {
-      event.preventDefault();
-      if (!recognition || sending || recognizing || isPressingMic) return;
+    async function completeVoiceInput(browserText = '') {
+      const text = normalizeTrainingCommand(browserText);
+      if (text) {
+        await sendMessage(text);
+        return;
+      }
 
-      isPressingMic = true;
+      showToast(speechErrorMessage || '没有识别到语音，请再试一次。', 7000);
+      speechErrorMessage = '';
+      voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+    }
+
+    function showVoiceCancel(show) {
+      voiceCancelEl.classList.toggle('show', show);
+      if (!show) {
+        voiceCanceling = false;
+        voiceCancelEl.classList.remove('active');
+        voiceCancelEl.textContent = '上滑取消';
+      }
+    }
+
+    function getVoicePoint(event) {
+      const touch = event.changedTouches?.[0] || event.touches?.[0];
+      if (touch) return { x: touch.clientX, y: touch.clientY };
+      return { x: event.clientX, y: event.clientY };
+    }
+
+    function isPointInCancelZone(point) {
+      if (!point || !voiceCancelEl.classList.contains('show')) return false;
+      const rect = voiceCancelEl.getBoundingClientRect();
+      const expanded = 18;
+      return (
+        point.x >= rect.left - expanded &&
+        point.x <= rect.right + expanded &&
+        point.y >= rect.top - expanded &&
+        point.y <= rect.bottom + expanded
+      );
+    }
+
+    function updateVoiceCancelState(event) {
+      if (!isPressingMic && !recognizing) return;
+      const point = getVoicePoint(event);
+      voiceCanceling = isPointInCancelZone(point);
+      voiceCancelEl.classList.toggle('active', voiceCanceling);
+      voiceCancelEl.textContent = voiceCanceling ? '松开取消' : '上滑取消';
+      voiceStatusEl.textContent = voiceCanceling ? '松开手指，取消发送' : '正在聆听，松开发送';
+    }
+
+    async function cancelVoiceInput() {
+      isPressingMic = false;
       shouldSendVoiceOnEnd = false;
       recognitionStartCanceled = false;
       finalVoiceText = '';
       inputEl.value = '';
+      speechErrorMessage = '';
+
+      if (recognition && recognizing) {
+        try {
+          recognition.abort();
+        } catch (err) {
+        }
+      }
+
+      recognizing = false;
+      micBtn.classList.remove('active');
+      micBtn.setAttribute('aria-label', '按住语音输入');
+      showVoiceCancel(false);
+      voiceStatusEl.textContent = '已取消发送';
+      setTimeout(() => {
+        if (!recognizing && !isPressingMic && !sending) {
+          voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+        }
+      }, 900);
+    }
+
+    async function startPressToTalk(event) {
+      event.preventDefault();
+      if (sending || recognizing || isPressingMic || stoppingVoice) return;
+      unlockAudioPlayback();
+
+      isPressingMic = true;
+      shouldSendVoiceOnEnd = false;
+      recognitionStartCanceled = false;
+      speechErrorMessage = '';
+      voiceCanceling = false;
+      finalVoiceText = '';
+      inputEl.value = '';
+      stopAssistantAudio();
+      showVoiceCancel(true);
 
       if (event.pointerId !== undefined && micBtn.setPointerCapture) {
         try {
@@ -1018,23 +1232,35 @@
       try {
         voiceStatusEl.textContent = '正在请求麦克风权限...';
         await ensureMicrophonePermission();
-        if (!isPressingMic) {
-          recognitionStartCanceled = true;
-          voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
-          return;
+        recognizing = true;
+        micBtn.classList.add('active');
+        micBtn.setAttribute('aria-label', '松开发送语音');
+        voiceStatusEl.textContent = '正在聆听，松开发送';
+
+        if (USE_BROWSER_SPEECH_RECOGNITION && recognition) {
+          recognition.start();
         }
-        recognition.start();
       } catch (err) {
         isPressingMic = false;
         shouldSendVoiceOnEnd = false;
+        recognizing = false;
+        micBtn.classList.remove('active');
+        showVoiceCancel(false);
         voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
         showToast(err.message, 8000);
       }
     }
 
-    function finishPressToTalk(event) {
+    function movePressToTalk(event) {
       event.preventDefault();
-      if (!recognition || sending) return;
+      updateVoiceCancelState(event);
+    }
+
+    async function finishPressToTalk(event) {
+      event.preventDefault();
+      if (sending || stoppingVoice || (!recognizing && !isPressingMic)) return;
+      stoppingVoice = true;
+      const shouldCancel = voiceCanceling || isPointInCancelZone(getVoicePoint(event));
       if (event.pointerId !== undefined && micBtn.releasePointerCapture) {
         try {
           micBtn.releasePointerCapture(event.pointerId);
@@ -1044,13 +1270,32 @@
 
       isPressingMic = false;
       shouldSendVoiceOnEnd = true;
-      if (recognizing) {
-        voiceStatusEl.textContent = '正在发送语音...';
-        recognition.stop();
-      } else if (recognitionStartCanceled) {
-        shouldSendVoiceOnEnd = false;
-        recognitionStartCanceled = false;
-        voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+      try {
+        if (shouldCancel) {
+          await cancelVoiceInput();
+          return;
+        }
+        if (USE_BROWSER_SPEECH_RECOGNITION && recognition && recognizing) {
+          voiceStatusEl.textContent = '正在发送语音...';
+          recognition.stop();
+        } else if (recognitionStartCanceled) {
+          shouldSendVoiceOnEnd = false;
+          recognitionStartCanceled = false;
+          voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
+        } else {
+          recognizing = false;
+          micBtn.classList.remove('active');
+          micBtn.setAttribute('aria-label', '按住语音输入');
+          showVoiceCancel(false);
+          const shouldSend = shouldSendVoiceOnEnd;
+          shouldSendVoiceOnEnd = false;
+          if (shouldSend && !sending) {
+            await completeVoiceInput('');
+          }
+        }
+      } finally {
+        if (!voiceCanceling) showVoiceCancel(false);
+        stoppingVoice = false;
       }
     }
 
@@ -1059,15 +1304,21 @@
     });
 
     micBtn.addEventListener('pointerdown', startPressToTalk);
+    micBtn.addEventListener('pointermove', movePressToTalk);
     micBtn.addEventListener('pointerup', finishPressToTalk);
     micBtn.addEventListener('pointercancel', finishPressToTalk);
     micBtn.addEventListener('pointerleave', event => {
-      if (isPressingMic) finishPressToTalk(event);
+      if (isPressingMic) updateVoiceCancelState(event);
     });
     micBtn.addEventListener('touchstart', startPressToTalk, { passive: false });
+    micBtn.addEventListener('touchmove', movePressToTalk, { passive: false });
     micBtn.addEventListener('touchend', finishPressToTalk, { passive: false });
     micBtn.addEventListener('touchcancel', finishPressToTalk, { passive: false });
+    voiceCancelEl.addEventListener('pointermove', movePressToTalk);
+    voiceCancelEl.addEventListener('touchmove', movePressToTalk, { passive: false });
     micBtn.addEventListener('contextmenu', event => event.preventDefault());
+    document.addEventListener('pointerdown', unlockAudioPlayback, { once: true, passive: true });
+    document.addEventListener('touchstart', unlockAudioPlayback, { once: true, passive: true });
 
     document.getElementById('close-timeout').addEventListener('click', closeOverlay);
     document.getElementById('stage-next').addEventListener('click', () => {
