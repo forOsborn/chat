@@ -733,6 +733,10 @@
       const compact = raw.replace(/[。.!！？，,、\s]/g, '');
       if (!compact) return raw;
 
+      if (!timerStarted && currentStage === 0 && compact === '训练') {
+        return '开始训练';
+      }
+
       const startAliases = [
         '开始训练',
         '开始训炼',
@@ -741,6 +745,7 @@
         '开始',
         '开训',
         '训练开始',
+        '训练',
         '爱训',
         '爱情',
         '开始进行'
