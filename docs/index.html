@@ -448,8 +448,8 @@
   <audio id="assistant-audio" preload="auto"></audio>
 
   <script>
-    //const BACKEND_BASE = 'http://localhost:3000';
-    const BACKEND_BASE =chat-production-ef67.up.railway.app
+    // const BACKEND_BASE = 'http://localhost:3000';
+    const BACKEND_BASE = 'https://chat-production-ef67.up.railway.app';
     const TEST_MODE = false;
     const TEST_STAGE_MINUTES = 5;
     const FORMAL_STAGE_MINUTES = 30;
@@ -1058,6 +1058,9 @@
     micBtn.addEventListener('pointerleave', event => {
       if (isPressingMic) finishPressToTalk(event);
     });
+    micBtn.addEventListener('touchstart', startPressToTalk, { passive: false });
+    micBtn.addEventListener('touchend', finishPressToTalk, { passive: false });
+    micBtn.addEventListener('touchcancel', finishPressToTalk, { passive: false });
     micBtn.addEventListener('contextmenu', event => event.preventDefault());
 
     document.getElementById('close-timeout').addEventListener('click', closeOverlay);
