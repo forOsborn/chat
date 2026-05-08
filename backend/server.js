@@ -2,17 +2,28 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const fsSync = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const tencentcloud = require('tencentcloud-sdk-nodejs');
 
 const app = express();
+const execFileAsync = promisify(execFile);
 const PORT = Number(process.env.PORT || 3000);
 const COZE_API_BASE = process.env.COZE_API_BASE || 'https://api.coze.cn';
 const COZE_PAT = process.env.COZE_PAT;
 const BOT_ID = process.env.BOT_ID;
+const WHISPER_COMMAND = process.env.WHISPER_COMMAND || 'whisper';
+const WHISPER_CPP_COMMAND = process.env.WHISPER_CPP_COMMAND || path.join(__dirname, 'tools', 'whisper.cpp', 'Release', 'whisper-cli.exe');
+const WHISPER_CPP_MODEL = process.env.WHISPER_CPP_MODEL || path.join(__dirname, 'models', 'ggml-base.bin');
+const FFMPEG_COMMAND = process.env.FFMPEG_COMMAND || findFfmpegCommand();
+const WHISPER_MODEL = process.env.WHISPER_MODEL || 'base';
+const WHISPER_LANGUAGE = process.env.WHISPER_LANGUAGE || 'Chinese';
+const WHISPER_TIMEOUT_MS = Number(process.env.WHISPER_TIMEOUT_MS || 120000);
 const TENCENT_SECRET_ID = process.env.TENCENT_SECRET_ID;
 const TENCENT_SECRET_KEY = process.env.TENCENT_SECRET_KEY;
 const TENCENT_TTS_REGION = process.env.TENCENT_TTS_REGION || 'ap-guangzhou';
@@ -22,10 +33,12 @@ const TENCENT_TTS_VOICE_TYPE = Number(process.env.TENCENT_TTS_VOICE_TYPE || 5010
 const TENCENT_TTS_CODEC = process.env.TENCENT_TTS_CODEC || 'mp3';
 const TENCENT_TTS_SAMPLE_RATE = Number(process.env.TENCENT_TTS_SAMPLE_RATE || 24000);
 const AUDIO_DIR = process.env.AUDIO_DIR || path.join(os.tmpdir(), 'coze-voice-only-audio');
+const FRONTEND_DIR = path.join(__dirname, '..', 'docs');
 
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
 app.use('/audio', express.static(AUDIO_DIR));
+app.use(express.static(FRONTEND_DIR));
 
 const sessions = new Map();
 const TtsClient = tencentcloud.tts.v20190823.Client;
@@ -69,6 +82,22 @@ function genCozeUserId() {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function findFfmpegCommand() {
+  const wingetFfmpeg = path.join(
+    os.homedir(),
+    'AppData',
+    'Local',
+    'Microsoft',
+    'WinGet',
+    'Packages',
+    'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe',
+    'ffmpeg-8.1.1-full_build',
+    'bin',
+    'ffmpeg.exe'
+  );
+  return fsSync.existsSync(wingetFfmpeg) ? wingetFfmpeg : 'ffmpeg';
 }
 
 function safeJsonParse(text) {
@@ -194,8 +223,102 @@ function normalizeBase64Audio(audioBase64) {
   return commaIndex >= 0 ? raw.slice(commaIndex + 1) : raw;
 }
 
+function getAudioExtension(mimeType) {
+  const type = String(mimeType || '').toLowerCase();
+  if (type.includes('wav')) return 'wav';
+  if (type.includes('mpeg') || type.includes('mp3')) return 'mp3';
+  if (type.includes('mp4') || type.includes('m4a')) return 'm4a';
+  if (type.includes('ogg')) return 'ogg';
+  if (type.includes('webm')) return 'webm';
+  if (type.includes('aac')) return 'aac';
+  return 'webm';
+}
+
+async function isLikelySilentWav(filePath) {
+  const buffer = await fs.readFile(filePath);
+  const dataIndex = buffer.indexOf(Buffer.from('data'));
+  if (dataIndex < 0 || dataIndex + 8 >= buffer.length) return false;
+
+  const dataSize = buffer.readUInt32LE(dataIndex + 4);
+  const start = dataIndex + 8;
+  const end = Math.min(start + dataSize, buffer.length);
+  let sumAbs = 0;
+  let samples = 0;
+
+  for (let offset = start; offset + 1 < end; offset += 2) {
+    sumAbs += Math.abs(buffer.readInt16LE(offset));
+    samples += 1;
+  }
+
+  if (!samples) return true;
+  return sumAbs / samples < 80;
+}
+
+async function recognizeSpeechWithWhisper({ audioBuffer, mimeType }) {
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'coze-whisper-'));
+  const audioPath = path.join(workDir, `speech.${getAudioExtension(mimeType)}`);
+
+  try {
+    await fs.writeFile(audioPath, audioBuffer);
+    if (!fsSync.existsSync(WHISPER_CPP_COMMAND)) {
+      throw new Error(`whisper.cpp command not found: ${WHISPER_CPP_COMMAND}`);
+    }
+    if (!fsSync.existsSync(WHISPER_CPP_MODEL)) {
+      throw new Error(`whisper.cpp model not found: ${WHISPER_CPP_MODEL}`);
+    }
+
+    const wavPath = path.join(workDir, 'speech_converted.wav');
+    await execFileAsync(FFMPEG_COMMAND, [
+      '-y',
+      '-i',
+      audioPath,
+      '-ar',
+      '16000',
+      '-ac',
+      '1',
+      wavPath
+    ], {
+      timeout: WHISPER_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024 * 4,
+      windowsHide: true
+    });
+
+    if (await isLikelySilentWav(wavPath)) return '';
+
+    const whisperCppDir = path.dirname(WHISPER_CPP_COMMAND);
+    const whisperCppModelArg = path.relative(whisperCppDir, WHISPER_CPP_MODEL);
+    const outputBase = path.join(workDir, 'transcript');
+    const { stdout } = await execFileAsync(WHISPER_CPP_COMMAND, [
+      '-m',
+      whisperCppModelArg,
+      '-f',
+      wavPath,
+      '-l',
+      'zh',
+      '-otxt',
+      '-of',
+      outputBase
+    ], {
+      cwd: whisperCppDir,
+      timeout: WHISPER_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024 * 4,
+      windowsHide: true
+    });
+
+    const transcript = await fs.readFile(`${outputBase}.txt`, 'utf8').catch(() => '');
+    return normalizeTranscript(transcript || stdout);
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      throw new Error('Whisper command not found. Install with: pip install -U openai-whisper, and make sure ffmpeg is installed.');
+    }
+    throw err;
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function recognizeSpeech({ audioBase64, mimeType }) {
-  if (!asrClient) {
+  if (false && !asrClient) {
     throw new Error('后端未配置腾讯云语音识别，请配置 TENCENT_SECRET_ID / TENCENT_SECRET_KEY');
   }
 
@@ -209,6 +332,17 @@ async function recognizeSpeech({ audioBase64, mimeType }) {
   }
 
   const type = String(mimeType || '').toLowerCase();
+  try {
+    return await recognizeSpeechWithWhisper({ audioBuffer, mimeType });
+  } catch (err) {
+    if (!asrClient) throw err;
+    console.warn('Whisper ASR warning, fallback to Tencent ASR:', err.message);
+  }
+
+  if (!asrClient) {
+    throw new Error('Whisper ASR failed and Tencent ASR is not configured.');
+  }
+
   const voiceFormat =
     type.includes('wav') ? 'wav' :
     type.includes('mp3') ? 'mp3' :
@@ -571,6 +705,10 @@ app.get('/api/health', (req, res) => {
     config: {
       cozePat: Boolean(COZE_PAT),
       botId: Boolean(BOT_ID),
+      whisperCommand: WHISPER_COMMAND,
+      whisperCppCommand: WHISPER_CPP_COMMAND,
+      whisperCppModel: WHISPER_CPP_MODEL,
+      whisperModel: WHISPER_MODEL,
       tencentTts: Boolean(ttsClient),
       tencentAsr: Boolean(asrClient)
     }

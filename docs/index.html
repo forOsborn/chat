@@ -483,7 +483,7 @@
     const BACKEND_BASE = ['localhost', '127.0.0.1'].includes(location.hostname)
       ? LOCAL_BACKEND_BASE
       : REMOTE_BACKEND_BASE;
-    const TEST_MODE = true;
+    const TEST_MODE = false;
     const TEST_STAGE_MINUTES = 5;
     const FORMAL_STAGE_MINUTES = 30;
 
@@ -533,6 +533,7 @@
     const voiceStatusEl = document.getElementById('voice-status');
     const audioEl = document.getElementById('assistant-audio');
     const isMobileBrowser = /Android|iPhone|iPad|iPod|Mobile|MicroMessenger/i.test(navigator.userAgent);
+    const isWeChatBrowser = /MicroMessenger/i.test(navigator.userAgent);
     const timerEl = () => document.getElementById('training-timer');
     const toastEl = () => document.getElementById('timer-toast');
     const overlayEl = () => document.getElementById('timeout-overlay');
@@ -560,6 +561,10 @@
       el._timer = setTimeout(() => {
         el.style.display = 'none';
       }, duration);
+    }
+
+    function showWeChatVoiceHint() {
+      showToast('微信内置浏览器无法稳定连接语音识别服务。请点击右上角三个点，选择“在浏览器打开”，再继续语音训练。', 9000);
     }
 
     async function unlockAudioPlayback() {
@@ -1096,15 +1101,17 @@
     function setupSpeechRecognition() {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          micBtn.disabled = true;
-          micBtn.title = '当前浏览器不支持语音输入';
-          voiceStatusEl.textContent = '当前浏览器不支持语音输入';
-        } else {
-          recognition = null;
-          micBtn.title = '按住说话，松开发送';
-          voiceStatusEl.textContent = '按住麦克风开始说话，松开发送';
-        }
+        micBtn.disabled = true;
+        micBtn.title = '当前浏览器不支持语音识别';
+        voiceStatusEl.textContent = '当前浏览器不支持语音识别，请换用 Chrome 或 Edge';
+        return;
+      }
+
+      if (isWeChatBrowser) {
+        micBtn.disabled = true;
+        micBtn.title = '请在系统浏览器中打开后继续语音训练';
+        voiceStatusEl.textContent = '请在系统浏览器中打开后继续语音训练';
+        setTimeout(showWeChatVoiceHint, 600);
         return;
       }
 
@@ -1302,6 +1309,8 @@
 
         if (USE_BROWSER_SPEECH_RECOGNITION && recognition) {
           recognition.start();
+        } else {
+          throw new Error('当前浏览器不支持语音识别，请换用 Chrome 或 Edge。');
         }
       } catch (err) {
         resetRecognitionUi();
