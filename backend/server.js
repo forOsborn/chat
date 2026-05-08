@@ -2,12 +2,24 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs/promises');
+const path = require('path');
+const crypto = require('crypto');
+const os = require('os');
+const tencentcloud = require('tencentcloud-sdk-nodejs');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const COZE_API_BASE = process.env.COZE_API_BASE || 'https://api.coze.cn';
 const COZE_PAT = process.env.COZE_PAT;
 const BOT_ID = process.env.BOT_ID;
+const TENCENT_SECRET_ID = process.env.TENCENT_SECRET_ID;
+const TENCENT_SECRET_KEY = process.env.TENCENT_SECRET_KEY;
+const TENCENT_TTS_REGION = process.env.TENCENT_TTS_REGION || 'ap-guangzhou';
+const TENCENT_TTS_VOICE_TYPE = Number(process.env.TENCENT_TTS_VOICE_TYPE || 501002);
+const TENCENT_TTS_CODEC = process.env.TENCENT_TTS_CODEC || 'mp3';
+const TENCENT_TTS_SAMPLE_RATE = Number(process.env.TENCENT_TTS_SAMPLE_RATE || 24000);
+const AUDIO_DIR = process.env.AUDIO_DIR || path.join(os.tmpdir(), 'coze-voice-only-audio');
 
 if (!COZE_PAT) {
   throw new Error('缺少 COZE_PAT，请在 .env 中配置');
@@ -18,11 +30,31 @@ if (!BOT_ID) {
 
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
+app.use('/audio', express.static(AUDIO_DIR));
 
 const sessions = new Map();
+const TtsClient = tencentcloud.tts.v20190823.Client;
+const ttsClient = TENCENT_SECRET_ID && TENCENT_SECRET_KEY
+  ? new TtsClient({
+      credential: {
+        secretId: TENCENT_SECRET_ID,
+        secretKey: TENCENT_SECRET_KEY
+      },
+      region: TENCENT_TTS_REGION,
+      profile: {
+        httpProfile: {
+          endpoint: 'tts.tencentcloudapi.com'
+        }
+      }
+    })
+  : null;
 
 function genLocalSessionId() {
   return `local_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function genCozeUserId() {
+  return `nursing_training_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`.slice(0, 64);
 }
 
 function sleep(ms) {
@@ -52,6 +84,102 @@ function normalizeTranscript(text) {
     .replace(/\r/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function removeParentheticalText(text) {
+  let result = String(text || '');
+  let previous = '';
+  while (result !== previous) {
+    previous = result;
+    result = result
+      .replace(/（[^（）]*）/g, '')
+      .replace(/\([^()]*\)/g, '');
+  }
+  return result;
+}
+
+function cleanTtsText(text) {
+  return removeParentheticalText(normalizeTranscript(text))
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/Powered by coze.*$/i, '')
+    .replace(/\\[rnt]/g, ' ')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '')
+    .replace(/[\\_]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitTtsText(text, maxLen = 120) {
+  const source = cleanTtsText(text);
+  const chunks = [];
+
+  source.split(/(?<=[。！？!?；;])\s*/).forEach(part => {
+    let rest = part.trim();
+    while (rest.length > maxLen) {
+      let cut = Math.max(
+        rest.lastIndexOf('，', maxLen),
+        rest.lastIndexOf(',', maxLen),
+        rest.lastIndexOf('、', maxLen),
+        rest.lastIndexOf(' ', maxLen)
+      );
+      if (cut < 40) cut = maxLen;
+      chunks.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut).trim();
+    }
+    if (rest) chunks.push(rest);
+  });
+
+  return chunks.filter(Boolean);
+}
+
+async function synthesizeSpeech(text) {
+  if (!ttsClient) return null;
+
+  const chunks = splitTtsText(text);
+  if (chunks.length === 0) return null;
+
+  await fs.mkdir(AUDIO_DIR, { recursive: true });
+  cleanupOldAudioFiles().catch(err => {
+    console.warn('cleanup audio warning:', err.message);
+  });
+
+  const buffers = [];
+  for (const chunk of chunks) {
+    const result = await ttsClient.TextToVoice({
+      Text: chunk,
+      SessionId: crypto.randomUUID(),
+      ModelType: 1,
+      VoiceType: TENCENT_TTS_VOICE_TYPE,
+      Codec: TENCENT_TTS_CODEC,
+      SampleRate: TENCENT_TTS_SAMPLE_RATE
+    });
+
+    if (!result?.Audio) {
+      throw new Error(`Tencent TTS returned empty audio for request ${result?.RequestId || ''}`);
+    }
+
+    buffers.push(Buffer.from(result.Audio, 'base64'));
+  }
+
+  const filename = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${TENCENT_TTS_CODEC}`;
+  const filePath = path.join(AUDIO_DIR, filename);
+  await fs.writeFile(filePath, Buffer.concat(buffers));
+  return `/audio/${filename}`;
+}
+
+async function cleanupOldAudioFiles(maxAgeMs = 24 * 60 * 60 * 1000) {
+  const now = Date.now();
+  const files = await fs.readdir(AUDIO_DIR).catch(() => []);
+
+  await Promise.all(files.map(async file => {
+    if (!/\.(mp3|wav|pcm)$/i.test(file)) return;
+    const filePath = path.join(AUDIO_DIR, file);
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat || now - stat.mtimeMs < maxAgeMs) return;
+    await fs.unlink(filePath).catch(() => {});
+  }));
 }
 
 function parseTranscriptStats(transcript) {
@@ -218,24 +346,69 @@ async function listChatMessages({ conversationId, chatId }) {
   return cozeFetch(path, { method: 'GET' });
 }
 
-async function waitForChatAndGetAnswer({ conversationId, chatId, maxPoll = 30, intervalMs = 1200 }) {
+function getMessageItems(messageListResponse) {
+  const data = messageListResponse?.data;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.messages)) return data.messages;
+  if (Array.isArray(messageListResponse?.messages)) return messageListResponse.messages;
+  return [];
+}
+
+function isFinalAnswerMessage(message) {
+  if (!message || typeof message.content !== 'string' || !message.content.trim()) return false;
+  if (message.role !== 'assistant') return false;
+
+  const type = String(message.type || message.message_type || message.msg_type || '').toLowerCase();
+  if (type && type !== 'answer' && type !== 'text') return false;
+
+  const content = message.content.trim();
+  if (content.startsWith('{"msg_type":"knowledge_recall"')) return false;
+  if (content.includes('"msg_type":"knowledge_recall"')) return false;
+  if (content.length > 3000 && /^[\[{]/.test(content)) return false;
+
+  return true;
+}
+
+function pickAnswerMessage(items) {
+  return [...items].reverse().find(isFinalAnswerMessage) || null;
+}
+
+async function waitForChatAndGetAnswer({ conversationId, chatId, maxPoll = 60, intervalMs = 1500 }) {
+  let lastStatus = '';
   for (let i = 0; i < maxPoll; i++) {
     const info = await retrieveChat({ conversationId, chatId });
     const status = info?.data?.status || info?.status;
+    lastStatus = status || 'unknown';
 
     if (status === 'completed') {
       const msgData = await listChatMessages({ conversationId, chatId });
-      const items = msgData?.data || [];
+      const items = getMessageItems(msgData);
+      const answerMsg = pickAnswerMessage(items);
 
-      const answerMsg =
-        [...items].reverse().find(m => m.role === 'assistant' && m.type === 'answer') ||
-        [...items].reverse().find(m => m.role === 'assistant' && typeof m.content === 'string');
+      if (!answerMsg?.content) {
+        throw new Error('Coze 对话已完成，但未找到最终 answer 消息');
+      }
 
       return {
         chatInfo: info,
         messages: items,
         answer: answerMsg?.content || ''
       };
+    }
+
+    if (i >= 3) {
+      const msgData = await listChatMessages({ conversationId, chatId }).catch(() => null);
+      const items = getMessageItems(msgData);
+      const answerMsg = pickAnswerMessage(items);
+
+      if (answerMsg?.content) {
+        return {
+          chatInfo: info,
+          messages: items,
+          answer: answerMsg.content
+        };
+      }
     }
 
     if (status === 'failed' || status === 'canceled') {
@@ -245,7 +418,7 @@ async function waitForChatAndGetAnswer({ conversationId, chatId, maxPoll = 30, i
     await sleep(intervalMs);
   }
 
-  throw new Error('等待 Coze 对话完成超时');
+  throw new Error(`等待 Coze 对话完成超时，最后状态：${lastStatus}`);
 }
 
 async function sendOneOffMessage({ content, userId }) {
@@ -327,26 +500,72 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: 'backend running' });
 });
 
-app.post('/api/session/new', (req, res) => {
+app.all('/api/coze/proxy', async (req, res) => {
+  try {
+    const targetPath = String(req.query.path || '');
+    if (!targetPath.startsWith('/v3/chat')) {
+      return res.status(400).json({
+        code: 400,
+        msg: 'unsupported coze proxy path'
+      });
+    }
+
+    const options = { method: req.method };
+    if (!['GET', 'HEAD'].includes(req.method.toUpperCase())) {
+      options.body = JSON.stringify(req.body || {});
+    }
+
+    const cozeRes = await fetch(`${COZE_API_BASE}${targetPath}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${COZE_PAT}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const text = await cozeRes.text();
+    const contentType = cozeRes.headers.get('content-type');
+    if (contentType) {
+      res.type(contentType);
+    }
+    res.status(cozeRes.status).send(text);
+  } catch (err) {
+    console.error('/api/coze/proxy error:', err);
+    res.status(500).json({
+      code: 500,
+      msg: err.message
+    });
+  }
+});
+
+app.post('/api/session/new', async (req, res) => {
   try {
     const localSessionId = genLocalSessionId();
+    const cozeUserId = genCozeUserId();
+    const { conversationId } = await createConversation();
+    const now = Date.now();
 
     const session = {
       localSessionId,
+      conversationId,
+      cozeUserId,
+      botId: BOT_ID,
       timerStarted: false,
       currentStage: 0,
       status: 'created',
       stage1Scored: false,
       finalScored: false,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
+      createdAt: now,
+      updatedAt: now
     };
 
     sessions.set(localSessionId, session);
 
     res.json({
       ok: true,
-      localSessionId
+      localSessionId,
+      conversationId,
+      cozeUserId
     });
   } catch (err) {
     console.error('/api/session/new error:', err);
@@ -373,6 +592,52 @@ app.post('/api/session/start', (req, res) => {
       session
     });
   } catch (err) {
+    res.status(err.statusCode || 500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+app.post('/api/chat/send', async (req, res) => {
+  try {
+    const { localSessionId, content } = req.body || {};
+    const session = getSessionOrThrow(localSessionId);
+    const text = normalizeTranscript(content);
+
+    if (!text) {
+      return res.status(400).json({
+        ok: false,
+        error: 'content is required'
+      });
+    }
+
+    const { chatId } = await startChat({
+      conversationId: session.conversationId,
+      userId: session.cozeUserId,
+      content: text
+    });
+
+    const result = await waitForChatAndGetAnswer({
+      conversationId: session.conversationId,
+      chatId
+    });
+
+    session.updatedAt = Date.now();
+    let audioUrl = null;
+    try {
+      audioUrl = await synthesizeSpeech(result.answer || '');
+    } catch (ttsErr) {
+      console.warn('/api/chat/send tts warning:', ttsErr.message);
+    }
+
+    res.json({
+      ok: true,
+      answer: result.answer || '',
+      audioUrl
+    });
+  } catch (err) {
+    console.error('/api/chat/send error:', err);
     res.status(err.statusCode || 500).json({
       ok: false,
       error: err.message
