@@ -586,11 +586,17 @@
     }
 
     async function postJson(path, body) {
-      const res = await fetch(`${BACKEND_BASE}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {})
-      });
+      let res;
+      try {
+        res = await fetch(`${BACKEND_BASE}${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body || {})
+        });
+      } catch (fetchErr) {
+        throw new Error(`后端服务暂时不可达，请检查 Railway 后端是否已启动：${BACKEND_BASE}`);
+      }
+
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
         const err = new Error(data.error || `请求失败: ${path}`);
