@@ -519,6 +519,7 @@
     let finalFeedbackLocked = false;
     let chatLog = [];
     let currentStageAtSend = 0;
+    let currentRoundId = 0;
     let sending = false;
     let recognition = null;
     let recognizing = false;
@@ -718,14 +719,18 @@
     function pushChatLog(role, content, stage) {
       const text = normalizeText(content);
       if (!text) return;
-      chatLog.push({ role, content: text, stage, ts: Date.now() });
+      chatLog.push({ role, content: text, stage, roundId: currentRoundId, ts: Date.now() });
     }
 
-    function getStageTranscript(stage) {
+    function getStageTranscript(stage, roundId = null) {
       return chatLog
-        .filter(item => item.stage === stage && item.content)
+        .filter(item => item.stage === stage && item.content && (roundId === null || item.roundId === roundId))
         .map(item => `${item.role === 'user' ? '学员' : '患者/系统'}：${item.content}`)
         .join('\n');
+    }
+
+    function getCurrentRoundTranscript(stage) {
+      return getStageTranscript(stage, currentRoundId);
     }
 
     function getAllTranscript() {
@@ -1017,6 +1022,7 @@
       chatLog = [];
       currentStage = 0;
       currentStageAtSend = 0;
+      currentRoundId = 0;
       timerStarted = false;
       totalSeconds = TOTAL_SECONDS;
       stage1Ended = false;
@@ -1070,6 +1076,11 @@
       return answer;
     }
 
+    function beginNewRound(stage) {
+      currentRoundId += 1;
+      currentStageAtSend = stage;
+    }
+
     async function handleStartTrainingCommand(text) {
       appendMessage('user', text);
       inputEl.value = '';
@@ -1078,9 +1089,7 @@
       if (timerStarted) {
         const currentCase = getCurrentCase();
         const message = [
-          `当前处于${currentCase.stageName}（${currentCase.caseName}），已为你重新展示当前案例。`,
-          '',
-          buildCaseIntro(currentStage === 2 ? 2 : 1, 'repeat')
+          `您已开始训练。如果您是想再次训练此案例，请输入“再来一次${currentCase.caseName}”。`
         ].join('\n');
         appendMessage('assistant', message);
         pushChatLog('assistant', message, currentStage || 1);
@@ -1091,6 +1100,7 @@
       const startedAt = Date.now();
       await markTrainingStarted(startedAt);
       startTimer(startedAt);
+      beginNewRound(1);
       pushChatLog('user', text, 1);
       appendDeterministicCase(1, 'start');
       showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '20分钟/阶段正式模式'}。`);
@@ -1164,6 +1174,7 @@
           appendMessage('assistant', conflict);
           showToast(conflict, 6200);
         } else {
+          beginNewRound(expectedCase);
           appendDeterministicCase(expectedCase, 'repeat');
         }
         inputEl.focus();
@@ -1238,11 +1249,18 @@
       stage1Ended = true;
       stopTimer();
       showToast('第一阶段已到时，正在生成反馈。');
+      openOverlay({
+        title: '第一阶段反馈',
+        text: '第一阶段时间已到，本轮对话已结束，正在生成反馈，请稍候。',
+        tip: '',
+        feedback: '反馈正在生成中...',
+        showNext: false
+      });
 
       try {
         const data = await postJson('/api/session/stage1-timeup', {
           localSessionId,
-          transcript: getStageTranscript(1)
+          transcript: getCurrentRoundTranscript(1)
         });
         currentStage = 2;
         openOverlay({
@@ -1277,7 +1295,7 @@
       try {
         const data = await postJson('/api/session/final-timeup', {
           localSessionId,
-          transcript: getStageTranscript(2)
+          transcript: getCurrentRoundTranscript(2)
         });
         openOverlay({
           title: '训练结束反馈',
@@ -1674,6 +1692,7 @@
       if (!finalEnded && !timerInterval && totalSeconds > 0) {
         timerInterval = setInterval(tick, 1000);
       }
+      beginNewRound(2);
       appendDeterministicCase(2, 'timeup');
       showToast('已进入第二阶段，案例二内容已展示。');
     });
