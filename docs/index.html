@@ -505,7 +505,7 @@
       : REMOTE_BACKEND_BASE;
     const TEST_MODE = true;
     const TEST_STAGE_MINUTES = 5;
-    const FORMAL_STAGE_MINUTES = 30;
+    const FORMAL_STAGE_MINUTES = 20;
 
     let localSessionId = '';
     let timerStarted = false;
@@ -671,21 +671,21 @@
       if (stage === 2) {
         return [
           mode === 'timeup' ? '第一阶段时间已到。现进入第二阶段。' : '当前进入第二阶段。',
-          '请在后30分钟内完成案例二训练。下面是案例二的内容：',
+          '请在后20分钟内完成案例二训练。下面是案例二的内容：',
           currentCase.text,
           currentCase.marker
         ].join('\n');
       }
 
       return [
-        '本次训练共 60 分钟。',
-        '前 30 分钟为案例一训练，后 30 分钟为案例二训练。',
+        '本次训练共 40 分钟。',
+        '前 20 分钟为案例一训练，后 20 分钟为案例二训练。',
         '每个阶段内你可以进行多轮训练。',
         '每轮训练结束后，输入“结束本轮”或“请评分”，系统将立即输出反馈。',
         '若当前阶段仍有剩余时间，你可以再次开始同一案例训练。',
         '',
         '当前进入第一阶段。',
-        '请在前 30 分钟内完成案例一训练。',
+        '请在前 20 分钟内完成案例一训练。',
         '',
         '下面是案例一的内容：',
         currentCase.text,
@@ -1145,7 +1145,7 @@
       startTimer(startedAt);
       pushChatLog('user', text, 1);
       appendDeterministicCase(1, 'start');
-      showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。计时器已锁定，无法通过重新开始重置。`);
+      showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '20分钟/阶段正式模式'}。计时器已锁定，无法通过重新开始重置。`);
       inputEl.focus();
     }
 
