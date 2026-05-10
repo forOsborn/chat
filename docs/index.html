@@ -546,6 +546,31 @@
     const TOTAL_SECONDS = STAGE_MINUTES * 60 * 2;
     const STAGE_SECONDS = STAGE_MINUTES * 60;
     const REMIND_SECONDS = Math.min(3 * 60, Math.max(60, Math.floor(STAGE_SECONDS * 0.2)));
+    const TRAINING_STATE_KEY = 'nursingTrainingTimerStateV2';
+    const CASES = {
+      1: {
+        stageName: '第一阶段',
+        caseName: '案例一',
+        marker: '（训练标识：第一阶段-案例一）',
+        text: [
+          '训练案例1：赵护士按照医嘱，在治疗室为3床李女士准备输注的头孢曲松钠。在执行“三查八对”时，她发现该瓶药液有效期已过期两天。该药品属药房统一配送批次，外观无明显异常。赵护士立即停止操作，将过期药液单独封存并做醒目标识，确保其未被接入患者输液通路。随后，她严格按流程向护士长汇报，并同步通知药房更换合格药液。药房紧急配送新药液至病房，整个过程导致李女士输液治疗延迟约20分钟，期间，李女士仍在病房等待，对此情况不知情，也未因该差错受到任何伤害。科室同事听闻此事，建议：“患者治疗未受影响，不必特意告知，避免增加患者焦虑”。',
+          '【临床规范】临床护理差错告知通常由科室负责人主导、涉事护士共同参与。',
+          '【训练任务】本环节请你独立完成向患者的完整告知沟通过程——包括开场、陈述、共情、后续安排等全部环节。',
+          '请从以下引导句开始：“李女士，我想和您说明一下刚才输液延迟的情况……”'
+        ].join('\n')
+      },
+      2: {
+        stageName: '第二阶段',
+        caseName: '案例二',
+        marker: '（训练标识：第二阶段-案例二）',
+        text: [
+          '训练案例2：护士小郑在为患有阿尔茨海默病、认知功能严重受损的刘女士进行日常口腔护理时，因操作力度把控不当，不慎造成其口腔黏膜轻微破损。由于刘女士无法清晰表达疼痛，家属当时也不在场，事后并未发现异常。科室同事认为破损程度极轻，可自行愈合，若如实告知家属，反而会因“说不清、道不明”而引发不必要的医疗纠纷，因此建议小郑不上报、不告知。但小郑内心十分挣扎：她深知护理伦理要求尊重患者的知情权，即使患者无法表达，家属作为法定代理人也有权知晓；隐瞒不仅违背诚信原则，也可能因未加强后续观察而导致破损加重。',
+          '【临床规范】临床护理差错告知通常由科室负责人主导、涉事护士共同参与。',
+          '【训练任务】本环节请你独立完成向患者家属（刘女士女儿）的完整告知沟通过程——包括开场、陈述、共情、后续安排等全部环节。',
+          '请从以下引导句开始：“刘女士家属您好，占用您一点时间和您沟通一下……”'
+        ].join('\n')
+      }
+    };
 
     const messagesEl = document.getElementById('messages');
     const formEl = document.getElementById('composer');
@@ -589,6 +614,83 @@
 
     function showWeChatVoiceHint() {
       showToast('微信内置浏览器无法稳定连接语音识别服务。请点击右上角三个点，选择“在浏览器打开”，再继续语音训练。', 9000);
+    }
+
+    function getSavedTrainingState() {
+      try {
+        return JSON.parse(localStorage.getItem(TRAINING_STATE_KEY) || 'null');
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function saveTrainingState(startedAt) {
+      localStorage.setItem(TRAINING_STATE_KEY, JSON.stringify({
+        startedAt,
+        totalSeconds: TOTAL_SECONDS,
+        savedAt: Date.now()
+      }));
+    }
+
+    function clearTrainingState() {
+      localStorage.removeItem(TRAINING_STATE_KEY);
+    }
+
+    function applySavedTrainingState() {
+      const saved = getSavedTrainingState();
+      if (!saved?.startedAt) return false;
+
+      const elapsed = Math.max(0, Math.floor((Date.now() - Number(saved.startedAt)) / 1000));
+      if (elapsed >= TOTAL_SECONDS) {
+        timerStarted = true;
+        totalSeconds = 0;
+        currentStage = 3;
+        stage1Ended = true;
+        finalEnded = true;
+        updateTimerUI();
+        updateStageUI();
+        return true;
+      }
+
+      timerStarted = true;
+      totalSeconds = TOTAL_SECONDS - elapsed;
+      currentStage = totalSeconds > STAGE_SECONDS ? 1 : 2;
+      stage1Ended = currentStage >= 2;
+      updateTimerUI();
+      updateStageUI();
+      if (!timerInterval) timerInterval = setInterval(tick, 1000);
+      return true;
+    }
+
+    function getCurrentCase() {
+      return CASES[currentStage === 2 ? 2 : 1];
+    }
+
+    function buildCaseIntro(stage, mode = 'start') {
+      const currentCase = CASES[stage] || CASES[1];
+      if (stage === 2) {
+        return [
+          mode === 'timeup' ? '第一阶段时间已到。现进入第二阶段。' : '当前进入第二阶段。',
+          '请在后30分钟内完成案例二训练。下面是案例二的内容：',
+          currentCase.text,
+          currentCase.marker
+        ].join('\n');
+      }
+
+      return [
+        '本次训练共 60 分钟。',
+        '前 30 分钟为案例一训练，后 30 分钟为案例二训练。',
+        '每个阶段内你可以进行多轮训练。',
+        '每轮训练结束后，输入“结束本轮”或“请评分”，系统将立即输出反馈。',
+        '若当前阶段仍有剩余时间，你可以再次开始同一案例训练。',
+        '',
+        '当前进入第一阶段。',
+        '请在前 30 分钟内完成案例一训练。',
+        '',
+        '下面是案例一的内容：',
+        currentCase.text,
+        currentCase.marker
+      ].join('\n');
     }
 
     async function unlockAudioPlayback() {
@@ -901,21 +1003,23 @@
       localSessionId = data.localSessionId;
     }
 
-    async function markTrainingStarted() {
+    async function markTrainingStarted(startedAt = Date.now()) {
       if (!localSessionId) return;
       try {
-        await postJson('/api/session/start', { localSessionId });
+        await postJson('/api/session/start', { localSessionId, startedAt });
       } catch (err) {
         if (!isMissingSessionError(err)) throw err;
         await createTrainingSession();
-        await postJson('/api/session/start', { localSessionId });
+        await postJson('/api/session/start', { localSessionId, startedAt });
       }
     }
 
-    function startTimer() {
+    function startTimer(startedAt = Date.now()) {
       if (timerStarted) return;
+      saveTrainingState(startedAt);
       timerStarted = true;
       currentStage = 1;
+      totalSeconds = TOTAL_SECONDS;
       updateTimerUI();
       updateStageUI();
       timerInterval = setInterval(tick, 1000);
@@ -962,8 +1066,10 @@
       chatLog = [];
       currentStage = 0;
       currentStageAtSend = 0;
-      timerStarted = false;
-      totalSeconds = TOTAL_SECONDS;
+      if (!getSavedTrainingState()) {
+        timerStarted = false;
+        totalSeconds = TOTAL_SECONDS;
+      }
       stage1Ended = false;
       finalEnded = false;
       stage1FeedbackLocked = false;
@@ -979,7 +1085,8 @@
       try {
         return await postJson('/api/chat/send', {
           localSessionId,
-          content: text
+          content: text,
+          stage: currentStage || 1
         }, { signal });
       } catch (err) {
         if (!isMissingSessionError(err)) throw err;
@@ -988,7 +1095,8 @@
         showToast('检测到后端已重启，已自动开启一轮新会话。');
         return postJson('/api/chat/send', {
           localSessionId,
-          content: text
+          content: text,
+          stage: currentStage || 1
         }, { signal });
       }
     }
@@ -1006,9 +1114,74 @@
       }
     }
 
+    function appendDeterministicCase(stage, mode = 'repeat') {
+      const answer = buildCaseIntro(stage, mode);
+      appendMessage('assistant', answer);
+      pushChatLog('assistant', answer, stage);
+      return answer;
+    }
+
+    async function handleStartTrainingCommand(text) {
+      appendMessage('user', text);
+      inputEl.value = '';
+      autoResizeInput();
+
+      if (timerStarted) {
+        const currentCase = getCurrentCase();
+        const message = [
+          '训练计时已经开始，不能重新开始或重置计时器。',
+          `当前处于${currentCase.stageName}（${currentCase.caseName}），请继续当前阶段训练。`,
+          '',
+          buildCaseIntro(currentStage === 2 ? 2 : 1, 'repeat')
+        ].join('\n');
+        appendMessage('assistant', message);
+        pushChatLog('assistant', message, currentStage || 1);
+        inputEl.focus();
+        return;
+      }
+
+      const startedAt = Date.now();
+      await markTrainingStarted(startedAt);
+      startTimer(startedAt);
+      pushChatLog('user', text, 1);
+      appendDeterministicCase(1, 'start');
+      showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。计时器已锁定，无法通过重新开始重置。`);
+      inputEl.focus();
+    }
+
+    function isRepeatCurrentCaseCommand(text) {
+      const compact = getCompactText(text);
+      return [
+        '开始案例一',
+        '再来一次案例一',
+        '开始案例二',
+        '再来一次案例二',
+        '继续当前训练',
+        '继续训练',
+        '继续对话'
+      ].some(item => compact === item || compact.includes(item));
+    }
+
+    function isEnterStage2Command(text) {
+      const compact = getCompactText(text);
+      return [
+        '进入第二阶段',
+        '进入阶段二',
+        '第二阶段',
+        '进第二阶段',
+        '下一阶段',
+        '进入下一阶段'
+      ].some(item => compact === item || compact.includes(item));
+    }
+
     async function sendMessage(content) {
       const text = normalizeText(content);
       if (!text || sending) return;
+
+      if (isStartTrainingMessage(text)) {
+        await handleStartTrainingCommand(text);
+        return;
+      }
 
       const stageConflictMessage = getStageConflictMessage(text);
       if (stageConflictMessage) {
@@ -1017,6 +1190,34 @@
         inputEl.value = '';
         autoResizeInput();
         showToast(stageConflictMessage, 6200);
+        inputEl.focus();
+        return;
+      }
+
+      if (timerStarted && currentStage === 2 && isEnterStage2Command(text)) {
+        appendMessage('user', text);
+        pushChatLog('user', text, 2);
+        inputEl.value = '';
+        autoResizeInput();
+        appendDeterministicCase(2, 'timeup');
+        inputEl.focus();
+        return;
+      }
+
+      if (timerStarted && isRepeatCurrentCaseCommand(text)) {
+        const requestedCase = detectRequestedCase(text);
+        const expectedCase = currentStage === 2 ? 2 : 1;
+        appendMessage('user', text);
+        pushChatLog('user', text, expectedCase);
+        inputEl.value = '';
+        autoResizeInput();
+        if (requestedCase && requestedCase !== expectedCase) {
+          const conflict = getStageConflictMessage(text);
+          appendMessage('assistant', conflict);
+          showToast(conflict, 6200);
+        } else {
+          appendDeterministicCase(expectedCase, 'repeat');
+        }
         inputEl.focus();
         return;
       }
@@ -1040,12 +1241,6 @@
           removeNode(typing);
           appendMessage('assistant', '已停止本次回复，请重新输入或重新按住麦克风说话。');
           return;
-        }
-
-        if (isStartTrainingMessage(text) && !timerStarted) {
-          await markTrainingStarted();
-          startTimer();
-          showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '30分钟/阶段正式模式'}。`);
         }
 
         const answer = cleanForDisplayText(data.answer || '暂无回复');
@@ -1105,8 +1300,8 @@
         currentStage = 2;
         openOverlay({
           title: '第一阶段反馈',
-          text: '第一阶段已结束。关闭后请输入“进入第二阶段”，继续案例二训练。',
-          tip: '点击进入下一阶段后，计时会继续。',
+          text: '第一阶段已结束。点击进入下一阶段后，系统将直接展示案例二内容。',
+          tip: '计时会继续，且不会重新开始。',
           feedback: data.answer || '未获取到反馈文本',
           showNext: true
         });
@@ -1532,13 +1727,20 @@
       if (!finalEnded && !timerInterval && totalSeconds > 0) {
         timerInterval = setInterval(tick, 1000);
       }
-      showToast('已进入第二阶段。请在对话中输入“进入第二阶段”，然后继续训练。');
+      appendDeterministicCase(2, 'timeup');
+      showToast('已进入第二阶段，案例二内容已展示。');
     });
     document.getElementById('restart-training').addEventListener('click', async () => {
+      if (timerStarted && currentStage !== 3) {
+        closeOverlay();
+        showToast('训练计时已经开始，不能重新开始或重置计时器。请继续当前阶段训练。', 7000);
+        return;
+      }
       try {
         if (localSessionId) await postJson('/api/session/reset', { localSessionId });
       } catch (err) {
       }
+      clearTrainingState();
       location.reload();
     });
 
@@ -1549,10 +1751,21 @@
       setSending(true);
       try {
         await createTrainingSession();
-        appendMessage(
-          'assistant',
-          '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。'
-        );
+        const restored = applySavedTrainingState();
+        if (restored && timerStarted && currentStage !== 3) {
+          await markTrainingStarted(getSavedTrainingState()?.startedAt || Date.now()).catch(() => {});
+          appendMessage(
+            'assistant',
+            `已恢复本次训练计时，当前处于${getCurrentCase().stageName}（${getCurrentCase().caseName}）。计时器已开始后不能重置，请继续当前阶段训练。`
+          );
+        } else if (currentStage === 3) {
+          appendMessage('assistant', '本次训练计时已结束。如需开启新一轮训练，请点击重新开始。');
+        } else {
+          appendMessage(
+            'assistant',
+            '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。'
+          );
+        }
       } catch (err) {
         appendMessage('assistant', `创建新会话失败：${err.message}`);
       } finally {

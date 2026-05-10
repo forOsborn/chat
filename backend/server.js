@@ -41,6 +41,30 @@ app.use('/audio', express.static(AUDIO_DIR));
 app.use(express.static(FRONTEND_DIR));
 
 const sessions = new Map();
+const CASES = {
+  1: {
+    stageLabel: '第一阶段',
+    caseLabel: '案例一',
+    marker: '（训练标识：第一阶段-案例一）',
+    text: [
+      '训练案例1：赵护士按照医嘱，在治疗室为3床李女士准备输注的头孢曲松钠。在执行“三查八对”时，她发现该瓶药液有效期已过期两天。该药品属药房统一配送批次，外观无明显异常。赵护士立即停止操作，将过期药液单独封存并做醒目标识，确保其未被接入患者输液通路。随后，她严格按流程向护士长汇报，并同步通知药房更换合格药液。药房紧急配送新药液至病房，整个过程导致李女士输液治疗延迟约20分钟，期间，李女士仍在病房等待，对此情况不知情，也未因该差错受到任何伤害。科室同事听闻此事，建议：“患者治疗未受影响，不必特意告知，避免增加患者焦虑”。',
+      '【临床规范】临床护理差错告知通常由科室负责人主导、涉事护士共同参与。',
+      '【训练任务】本环节请你独立完成向患者的完整告知沟通过程——包括开场、陈述、共情、后续安排等全部环节。',
+      '请从以下引导句开始：“李女士，我想和您说明一下刚才输液延迟的情况……”'
+    ].join('\n')
+  },
+  2: {
+    stageLabel: '第二阶段',
+    caseLabel: '案例二',
+    marker: '（训练标识：第二阶段-案例二）',
+    text: [
+      '训练案例2：护士小郑在为患有阿尔茨海默病、认知功能严重受损的刘女士进行日常口腔护理时，因操作力度把控不当，不慎造成其口腔黏膜轻微破损。由于刘女士无法清晰表达疼痛，家属当时也不在场，事后并未发现异常。科室同事认为破损程度极轻，可自行愈合，若如实告知家属，反而会因“说不清、道不明”而引发不必要的医疗纠纷，因此建议小郑不上报、不告知。但小郑内心十分挣扎：她深知护理伦理要求尊重患者的知情权，即使患者无法表达，家属作为法定代理人也有权知晓；隐瞒不仅违背诚信原则，也可能因未加强后续观察而导致破损加重。',
+      '【临床规范】临床护理差错告知通常由科室负责人主导、涉事护士共同参与。',
+      '【训练任务】本环节请你独立完成向患者家属（刘女士女儿）的完整告知沟通过程——包括开场、陈述、共情、后续安排等全部环节。',
+      '请从以下引导句开始：“刘女士家属您好，占用您一点时间和您沟通一下……”'
+    ].join('\n')
+  }
+};
 const TtsClient = tencentcloud.tts.v20190823.Client;
 const AsrClient = tencentcloud.asr.v20190614.Client;
 const ttsClient = TENCENT_SECRET_ID && TENCENT_SECRET_KEY
@@ -132,6 +156,50 @@ function normalizeTranscript(text) {
     .replace(/\r/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function compactCommand(text) {
+  return normalizeTranscript(text).replace(/[。.!！？，,、\s]/g, '');
+}
+
+function isManualScoreRequest(text) {
+  const compact = compactCommand(text);
+  return [
+    '结束本轮',
+    '结束对话',
+    '本轮结束',
+    '请评分',
+    '请评价',
+    '输出反馈',
+    '给我反馈',
+    '我说完了'
+  ].some(item => compact === item || compact.includes(item));
+}
+
+function buildPatientTurnPrompt({ stage, userText }) {
+  const currentCase = CASES[stage] || CASES[1];
+  return [
+    '【系统确定性上下文】',
+    `当前阶段：${currentCase.stageLabel}`,
+    `当前案例：${currentCase.caseLabel}`,
+    `训练标识：${currentCase.marker}`,
+    '',
+    '案例原文已由网页固定输出给学员。你不得输出、复述、改写、扩写、补写任何案例原文。',
+    '你现在只负责基于以下固定案例，以患者/家属身份回应学员本轮发言。',
+    '',
+    '【固定案例原文】',
+    currentCase.text,
+    '',
+    '【你的回复边界】',
+    '1. 只扮演当前案例中的患者/家属。',
+    '2. 每次回复1到3句，通常最多提出1个问题。',
+    '3. 不评分、不教学、不总结、不输出案例原文。',
+    '4. 不得切换案例；不得因为学员口误或提到其他案例而改变当前案例。',
+    `5. 每次回复末尾必须单独附上：${currentCase.marker}`,
+    '',
+    '【学员本轮发言】',
+    userText
+  ].join('\n');
 }
 
 function removeParentheticalText(text) {
@@ -391,9 +459,23 @@ function parseTranscriptStats(transcript) {
   let validAssistantCount = 0;
 
   const invalidFragments = [
+    '开始训练',
+    '开始案例',
+    '再来一次案例',
+    '继续当前训练',
+    '本次训练共',
+    '前 30 分钟',
+    '后 30 分钟',
     '当前进入第一阶段',
+    '当前进入第二阶段',
+    '第一阶段时间已到',
+    '请在前 30 分钟',
+    '请在后30分钟',
+    '请在后 30 分钟',
     '下面是案例一的内容',
+    '下面是案例二的内容',
     '训练案例1',
+    '训练案例2',
     '【临床规范】',
     '【训练任务】',
     '请从以下引导句开始',
@@ -833,13 +915,13 @@ app.post('/api/session/new', async (req, res) => {
 
 app.post('/api/session/start', (req, res) => {
   try {
-    const { localSessionId } = req.body || {};
+    const { localSessionId, startedAt } = req.body || {};
     const session = getSessionOrThrow(localSessionId);
 
     session.timerStarted = true;
     session.currentStage = 1;
     session.status = 'running';
-    session.startedAt = Date.now();
+    session.startedAt = Number(startedAt) || session.startedAt || Date.now();
     session.updatedAt = Date.now();
 
     res.json({
@@ -858,7 +940,7 @@ app.post('/api/chat/send', async (req, res) => {
   let session = null;
   let chatId = '';
   try {
-    const { localSessionId, content } = req.body || {};
+    const { localSessionId, content, stage } = req.body || {};
     session = getSessionOrThrow(localSessionId);
     const text = normalizeTranscript(content);
 
@@ -869,10 +951,19 @@ app.post('/api/chat/send', async (req, res) => {
       });
     }
 
+    const currentStage = Number(stage || session.currentStage || 1) === 2 ? 2 : 1;
+    session.currentStage = currentStage;
+    const outboundContent = session.timerStarted && !isManualScoreRequest(text)
+      ? buildPatientTurnPrompt({
+          stage: currentStage,
+          userText: text
+        })
+      : text;
+
     const started = await startChat({
       conversationId: session.conversationId,
       userId: session.cozeUserId,
-      content: text
+      content: outboundContent
     });
     chatId = started.chatId;
     session.activeChatId = chatId;
