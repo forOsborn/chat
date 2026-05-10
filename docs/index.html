@@ -546,7 +546,6 @@
     const TOTAL_SECONDS = STAGE_MINUTES * 60 * 2;
     const STAGE_SECONDS = STAGE_MINUTES * 60;
     const REMIND_SECONDS = Math.min(3 * 60, Math.max(60, Math.floor(STAGE_SECONDS * 0.2)));
-    const TRAINING_STATE_KEY = 'nursingTrainingTimerStateV2';
     const CASES = {
       1: {
         stageName: '第一阶段',
@@ -614,52 +613,6 @@
 
     function showWeChatVoiceHint() {
       showToast('微信内置浏览器无法稳定连接语音识别服务。请点击右上角三个点，选择“在浏览器打开”，再继续语音训练。', 9000);
-    }
-
-    function getSavedTrainingState() {
-      try {
-        return JSON.parse(localStorage.getItem(TRAINING_STATE_KEY) || 'null');
-      } catch (err) {
-        return null;
-      }
-    }
-
-    function saveTrainingState(startedAt) {
-      localStorage.setItem(TRAINING_STATE_KEY, JSON.stringify({
-        startedAt,
-        totalSeconds: TOTAL_SECONDS,
-        savedAt: Date.now()
-      }));
-    }
-
-    function clearTrainingState() {
-      localStorage.removeItem(TRAINING_STATE_KEY);
-    }
-
-    function applySavedTrainingState() {
-      const saved = getSavedTrainingState();
-      if (!saved?.startedAt) return false;
-
-      const elapsed = Math.max(0, Math.floor((Date.now() - Number(saved.startedAt)) / 1000));
-      if (elapsed >= TOTAL_SECONDS) {
-        timerStarted = true;
-        totalSeconds = 0;
-        currentStage = 3;
-        stage1Ended = true;
-        finalEnded = true;
-        updateTimerUI();
-        updateStageUI();
-        return true;
-      }
-
-      timerStarted = true;
-      totalSeconds = TOTAL_SECONDS - elapsed;
-      currentStage = totalSeconds > STAGE_SECONDS ? 1 : 2;
-      stage1Ended = currentStage >= 2;
-      updateTimerUI();
-      updateStageUI();
-      if (!timerInterval) timerInterval = setInterval(tick, 1000);
-      return true;
     }
 
     function getCurrentCase() {
@@ -1016,7 +969,6 @@
 
     function startTimer(startedAt = Date.now()) {
       if (timerStarted) return;
-      saveTrainingState(startedAt);
       timerStarted = true;
       currentStage = 1;
       totalSeconds = TOTAL_SECONDS;
@@ -1066,10 +1018,8 @@
       chatLog = [];
       currentStage = 0;
       currentStageAtSend = 0;
-      if (!getSavedTrainingState()) {
-        timerStarted = false;
-        totalSeconds = TOTAL_SECONDS;
-      }
+      timerStarted = false;
+      totalSeconds = TOTAL_SECONDS;
       stage1Ended = false;
       finalEnded = false;
       stage1FeedbackLocked = false;
@@ -1129,8 +1079,7 @@
       if (timerStarted) {
         const currentCase = getCurrentCase();
         const message = [
-          '训练计时已经开始，不能重新开始或重置计时器。',
-          `当前处于${currentCase.stageName}（${currentCase.caseName}），请继续当前阶段训练。`,
+          `当前处于${currentCase.stageName}（${currentCase.caseName}），已为你重新展示当前案例。`,
           '',
           buildCaseIntro(currentStage === 2 ? 2 : 1, 'repeat')
         ].join('\n');
@@ -1145,7 +1094,7 @@
       startTimer(startedAt);
       pushChatLog('user', text, 1);
       appendDeterministicCase(1, 'start');
-      showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '20分钟/阶段正式模式'}。计时器已锁定，无法通过重新开始重置。`);
+      showToast(`训练已开始：当前为${TEST_MODE ? '5分钟/阶段测试模式' : '20分钟/阶段正式模式'}。`);
       inputEl.focus();
     }
 
@@ -1731,16 +1680,10 @@
       showToast('已进入第二阶段，案例二内容已展示。');
     });
     document.getElementById('restart-training').addEventListener('click', async () => {
-      if (timerStarted && currentStage !== 3) {
-        closeOverlay();
-        showToast('训练计时已经开始，不能重新开始或重置计时器。请继续当前阶段训练。', 7000);
-        return;
-      }
       try {
         if (localSessionId) await postJson('/api/session/reset', { localSessionId });
       } catch (err) {
       }
-      clearTrainingState();
       location.reload();
     });
 
@@ -1751,21 +1694,10 @@
       setSending(true);
       try {
         await createTrainingSession();
-        const restored = applySavedTrainingState();
-        if (restored && timerStarted && currentStage !== 3) {
-          await markTrainingStarted(getSavedTrainingState()?.startedAt || Date.now()).catch(() => {});
-          appendMessage(
-            'assistant',
-            `已恢复本次训练计时，当前处于${getCurrentCase().stageName}（${getCurrentCase().caseName}）。计时器已开始后不能重置，请继续当前阶段训练。`
-          );
-        } else if (currentStage === 3) {
-          appendMessage('assistant', '本次训练计时已结束。如需开启新一轮训练，请点击重新开始。');
-        } else {
-          appendMessage(
-            'assistant',
-            '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。'
-          );
-        }
+        appendMessage(
+          'assistant',
+          '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。'
+        );
       } catch (err) {
         appendMessage('assistant', `创建新会话失败：${err.message}`);
       } finally {
