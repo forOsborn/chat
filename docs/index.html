@@ -464,7 +464,6 @@
       <div id="feedback-content">反馈内容加载中...</div>
       <p id="overlay-tip"></p>
       <div class="timeout-actions">
-        <button id="restart-training">重新开始</button>
         <button id="stage-next" class="primary" style="display:none;">进入下一阶段</button>
         <button id="close-timeout" class="primary">我知道了</button>
       </div>
@@ -877,7 +876,7 @@
         return '当前处于第一阶段（案例一）训练时间内，暂不可进行案例二训练。请继续完成案例一；第一阶段到时后再进入案例二。';
       }
       if (currentStage === 2 && requestedCase === 1) {
-        return '当前处于第二阶段（案例二）训练时间内，暂不可进行案例一训练。请继续完成案例二；如需重练案例一，请重新开始一轮训练。';
+        return '当前处于第二阶段（案例二）训练时间内，暂不可进行案例一训练。请继续完成案例二。';
       }
       return '';
     }
@@ -1213,14 +1212,13 @@
       }
     }
 
-    function openOverlay({ title, text, tip, feedback = '', showNext = false, showRestart = true }) {
+    function openOverlay({ title, text, tip, feedback = '', showNext = false }) {
       overlayTitleEl().textContent = title;
       overlayTextEl().textContent = text;
       overlayTipEl().textContent = tip || '';
       feedbackContentEl().textContent = feedback || '暂无反馈内容';
       stageNextBtn().style.display = showNext ? 'inline-block' : 'none';
       closeBtn().style.display = showNext ? 'none' : 'inline-block';
-      document.getElementById('restart-training').style.display = showRestart ? 'inline-block' : 'none';
       overlayEl().style.display = 'flex';
     }
 
@@ -1250,7 +1248,7 @@
         openOverlay({
           title: '第一阶段反馈',
           text: '第一阶段已结束。点击进入下一阶段后，系统将直接展示案例二内容。',
-          tip: '计时会继续，且不会重新开始。',
+          tip: '点击进入下一阶段后，计时会继续。',
           feedback: data.answer || '未获取到反馈文本',
           showNext: true
         });
@@ -1679,14 +1677,6 @@
       appendDeterministicCase(2, 'timeup');
       showToast('已进入第二阶段，案例二内容已展示。');
     });
-    document.getElementById('restart-training').addEventListener('click', async () => {
-      try {
-        if (localSessionId) await postJson('/api/session/reset', { localSessionId });
-      } catch (err) {
-      }
-      location.reload();
-    });
-
     async function bootstrap() {
       updateTimerUI();
       updateStageUI();
