@@ -622,6 +622,10 @@
 
     function buildCaseIntro(stage, mode = 'start') {
       const currentCase = CASES[stage] || CASES[1];
+      if (mode === 'repeat') {
+        return currentCase.text;
+      }
+
       if (stage === 2) {
         return [
           mode === 'timeup' ? '第一阶段时间已到。现进入第二阶段。' : '当前进入第二阶段。',
