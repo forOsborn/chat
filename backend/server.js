@@ -169,6 +169,9 @@ function isManualScoreRequest(text) {
     '结束对话',
     '本轮结束',
     '请评分',
+    '点评分',
+    '点评一下',
+    '评价一下',
     '请评价',
     '输出反馈',
     '给我反馈',
@@ -757,7 +760,7 @@ async function sendOneOffMessage({ content, userId }) {
 function buildScoringPrompt({ stageLabel, caseLabel, transcript, forceTimeUp = true }) {
   const header = forceTimeUp
     ? '当前阶段时间已到，本轮对话已结束。'
-    : '';
+    : '本轮训练已由学员主动结束，请基于本轮对话生成反馈。';
 
   return [
     '你现在不是患者，也不是案例训练角色。',
@@ -812,6 +815,31 @@ function buildScoringPrompt({ stageLabel, caseLabel, transcript, forceTimeUp = t
     '以下是训练记录：',
     normalizeTranscript(transcript) || '（无记录）'
   ].filter(Boolean).join('\n');
+}
+
+async function generateScoreAnswer({ stageLabel, caseLabel, transcript, forceTimeUp }) {
+  const stats = parseTranscriptStats(transcript);
+
+  if (!stats.hasEffectiveDialogue) {
+    return buildNoEffectiveDialogueReport({
+      stageLabel,
+      caseLabel
+    });
+  }
+
+  const prompt = buildScoringPrompt({
+    stageLabel,
+    caseLabel,
+    transcript,
+    forceTimeUp
+  });
+
+  const result = await sendOneOffMessage({
+    content: prompt,
+    userId: `score_${Date.now()}_${Math.random().toString(16).slice(2)}`
+  });
+
+  return result.answer;
 }
 
 app.get('/api/health', (req, res) => {
@@ -1078,6 +1106,41 @@ app.post('/api/chat/cancel', async (req, res) => {
   }
 });
 
+app.post('/api/tts/synthesize', async (req, res) => {
+  try {
+    const { text } = req.body || {};
+    const content = normalizeTranscript(text);
+
+    if (!content) {
+      return res.status(400).json({
+        ok: false,
+        error: 'text is required'
+      });
+    }
+
+    let audioUrl = null;
+    let ttsError = null;
+    try {
+      audioUrl = await synthesizeSpeech(content);
+    } catch (ttsErr) {
+      ttsError = getTtsDiagnosticError(ttsErr);
+      console.warn('/api/tts/synthesize tts warning:', ttsErr.message);
+    }
+
+    res.json({
+      ok: true,
+      audioUrl,
+      ttsError
+    });
+  } catch (err) {
+    console.error('/api/tts/synthesize error:', err);
+    res.status(err.statusCode || 500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
 app.post('/api/session/stage1-timeup', async (req, res) => {
   try {
     const { localSessionId, transcript } = req.body || {};
@@ -1091,29 +1154,12 @@ app.post('/api/session/stage1-timeup', async (req, res) => {
       });
     }
 
-    const stats = parseTranscriptStats(transcript);
-
-    let answer = '';
-    if (!stats.hasEffectiveDialogue) {
-      answer = buildNoEffectiveDialogueReport({
-        stageLabel: '阶段一',
-        caseLabel: '案例一'
-      });
-    } else {
-      const prompt = buildScoringPrompt({
-        stageLabel: '阶段一',
-        caseLabel: '案例一',
-        transcript,
-        forceTimeUp: true
-      });
-
-      const result = await sendOneOffMessage({
-        content: prompt,
-        userId: `score_stage1_${Date.now()}`
-      });
-
-      answer = result.answer;
-    }
+    const answer = await generateScoreAnswer({
+      stageLabel: '阶段一',
+      caseLabel: '案例一',
+      transcript,
+      forceTimeUp: true
+    });
 
     session.stage1Scored = true;
     session.currentStage = 2;
@@ -1147,29 +1193,12 @@ app.post('/api/session/final-timeup', async (req, res) => {
       });
     }
 
-    const stats = parseTranscriptStats(transcript);
-
-    let answer = '';
-    if (!stats.hasEffectiveDialogue) {
-      answer = buildNoEffectiveDialogueReport({
-        stageLabel: '阶段二',
-        caseLabel: '案例二'
-      });
-    } else {
-      const prompt = buildScoringPrompt({
-        stageLabel: '阶段二',
-        caseLabel: '案例二',
-        transcript,
-        forceTimeUp: true
-      });
-
-      const result = await sendOneOffMessage({
-        content: prompt,
-        userId: `score_final_${Date.now()}`
-      });
-
-      answer = result.answer;
-    }
+    const answer = await generateScoreAnswer({
+      stageLabel: '阶段二',
+      caseLabel: '案例二',
+      transcript,
+      forceTimeUp: true
+    });
 
     session.finalScored = true;
     session.currentStage = 3;
@@ -1184,6 +1213,36 @@ app.post('/api/session/final-timeup', async (req, res) => {
     });
   } catch (err) {
     console.error('/api/session/final-timeup error:', err);
+    res.status(err.statusCode || 500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
+app.post('/api/session/score-current', async (req, res) => {
+  try {
+    const { localSessionId, stage, transcript } = req.body || {};
+    const session = getSessionOrThrow(localSessionId);
+    const currentStage = Number(stage || session.currentStage || 1) === 2 ? 2 : 1;
+    const stageLabel = currentStage === 2 ? '阶段二' : '阶段一';
+    const caseLabel = currentStage === 2 ? '案例二' : '案例一';
+
+    const answer = await generateScoreAnswer({
+      stageLabel,
+      caseLabel,
+      transcript,
+      forceTimeUp: false
+    });
+
+    session.updatedAt = Date.now();
+
+    res.json({
+      ok: true,
+      answer
+    });
+  } catch (err) {
+    console.error('/api/session/score-current error:', err);
     res.status(err.statusCode || 500).json({
       ok: false,
       error: err.message

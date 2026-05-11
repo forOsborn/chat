@@ -844,6 +844,23 @@
       return normalizeText(content).replace(/[。.!！？，,、\s]/g, '');
     }
 
+    function isManualScoreRequest(content) {
+      const compact = getCompactText(content);
+      return [
+        '结束本轮',
+        '结束对话',
+        '本轮结束',
+        '请评分',
+        '点评分',
+        '点评一下',
+        '评价一下',
+        '请评价',
+        '输出反馈',
+        '给我反馈',
+        '我说完了'
+      ].some(item => compact === item || compact.includes(item));
+    }
+
     function detectRequestedCase(content) {
       const compact = getCompactText(content);
       if (!compact) return 0;
@@ -1016,6 +1033,23 @@
       return parts.join(' | ') || '语音合成失败';
     }
 
+    async function synthesizeAndPlayText(text) {
+      const content = normalizeText(text);
+      if (!content) return;
+      try {
+        const data = await postJson('/api/tts/synthesize', { text: content }, { retries: 1 });
+        if (data.audioUrl) {
+          playAssistantAudio(data.audioUrl);
+        } else if (data.ttsError) {
+          showToast(`语音合成失败：${getTtsErrorMessage(data.ttsError)}`, 12000);
+          voiceStatusEl.textContent = '语音合成失败，请查看页面提示';
+        }
+      } catch (err) {
+        showToast(`语音合成请求失败：${err.message}`, 9000);
+        voiceStatusEl.textContent = '语音合成请求失败';
+      }
+    }
+
     function stopAssistantAudio() {
       if (!audioEl.paused) {
         audioEl.pause();
@@ -1083,6 +1117,7 @@
       const answer = buildCaseIntro(stage, mode);
       appendMessage('assistant', answer);
       pushChatLog('assistant', answer, stage);
+      synthesizeAndPlayText(answer);
       return answer;
     }
 
@@ -1103,6 +1138,7 @@
         ].join('\n');
         appendMessage('assistant', message);
         pushChatLog('assistant', message, currentStage || 1);
+        synthesizeAndPlayText(message);
         inputEl.focus();
         return;
       }
@@ -1142,12 +1178,43 @@
       ].some(item => compact === item || compact.includes(item));
     }
 
+    async function handleManualScoreCommand(text) {
+      const scoreStage = currentStage === 2 ? 2 : 1;
+      appendMessage('user', text);
+      inputEl.value = '';
+      autoResizeInput();
+      setSending(true);
+
+      const typing = appendTyping();
+      try {
+        const data = await postJson('/api/session/score-current', {
+          localSessionId,
+          stage: scoreStage,
+          transcript: getCurrentRoundTranscript(scoreStage)
+        });
+        removeNode(typing);
+        const answer = data.answer || '未获取到反馈文本';
+        appendMessage('assistant', answer);
+      } catch (err) {
+        removeNode(typing);
+        appendMessage('assistant', `评分失败：${err.message}`);
+      } finally {
+        setSending(false);
+        inputEl.focus();
+      }
+    }
+
     async function sendMessage(content) {
       const text = normalizeText(content);
       if (!text || sending) return;
 
       if (isStartTrainingMessage(text)) {
         await handleStartTrainingCommand(text);
+        return;
+      }
+
+      if (timerStarted && isManualScoreRequest(text)) {
+        await handleManualScoreCommand(text);
         return;
       }
 
@@ -1158,6 +1225,7 @@
         inputEl.value = '';
         autoResizeInput();
         showToast(stageConflictMessage, 6200);
+        synthesizeAndPlayText(stageConflictMessage);
         inputEl.focus();
         return;
       }
@@ -1183,6 +1251,7 @@
           const conflict = getStageConflictMessage(text);
           appendMessage('assistant', conflict);
           showToast(conflict, 6200);
+          synthesizeAndPlayText(conflict);
         } else {
           beginNewRound(expectedCase);
           appendDeterministicCase(expectedCase, 'repeat');
@@ -1718,10 +1787,9 @@
       setSending(true);
       try {
         await createTrainingSession();
-        appendMessage(
-          'assistant',
-          '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。'
-        );
+        const welcomeMessage = '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。';
+        appendMessage('assistant', welcomeMessage);
+        synthesizeAndPlayText(welcomeMessage);
       } catch (err) {
         appendMessage('assistant', `创建新会话失败：${err.message}`);
       } finally {
