@@ -285,6 +285,18 @@ async function synthesizeSpeech(text) {
   return `/audio/${filename}`;
 }
 
+function getTtsDiagnosticError(err) {
+  if (!err) return null;
+  const code = err.code || err.Code || err.name || '';
+  const requestId = err.requestId || err.RequestId || '';
+  const message = err.message || String(err);
+  return {
+    code: String(code || 'TTS_ERROR'),
+    requestId: String(requestId || ''),
+    message: String(message || '语音合成失败')
+  };
+}
+
 function normalizeBase64Audio(audioBase64) {
   const raw = String(audioBase64 || '');
   const commaIndex = raw.indexOf(',');
@@ -989,16 +1001,19 @@ app.post('/api/chat/send', async (req, res) => {
       session.activeChatId = '';
     }
     let audioUrl = null;
+    let ttsError = null;
     try {
       audioUrl = await synthesizeSpeech(result.answer || '');
     } catch (ttsErr) {
+      ttsError = getTtsDiagnosticError(ttsErr);
       console.warn('/api/chat/send tts warning:', ttsErr.message);
     }
 
     res.json({
       ok: true,
       answer: result.answer || '',
-      audioUrl
+      audioUrl,
+      ttsError
     });
   } catch (err) {
     if (session && chatId && session.cancelRequestedChatId === chatId) {

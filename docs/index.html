@@ -1006,6 +1006,16 @@
       });
     }
 
+    function getTtsErrorMessage(ttsError) {
+      if (!ttsError) return '';
+      if (typeof ttsError === 'string') return ttsError;
+      const parts = [];
+      if (ttsError.code) parts.push(ttsError.code);
+      if (ttsError.message) parts.push(ttsError.message);
+      if (ttsError.requestId) parts.push(`RequestId: ${ttsError.requestId}`);
+      return parts.join(' | ') || '语音合成失败';
+    }
+
     function stopAssistantAudio() {
       if (!audioEl.paused) {
         audioEl.pause();
@@ -1206,7 +1216,12 @@
         removeNode(typing);
         appendMessage('assistant', answer);
         pushChatLog('assistant', answer, currentStageAtSend);
-        playAssistantAudio(data.audioUrl);
+        if (data.audioUrl) {
+          playAssistantAudio(data.audioUrl);
+        } else if (data.ttsError) {
+          showToast(`语音合成失败：${getTtsErrorMessage(data.ttsError)}`, 12000);
+          voiceStatusEl.textContent = '语音合成失败，请查看页面提示';
+        }
       } catch (err) {
         removeNode(typing);
         if (err.name === 'AbortError') {
