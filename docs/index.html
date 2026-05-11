@@ -1092,6 +1092,9 @@
     }
 
     function stopAssistantAudio() {
+      pendingAudioUrl = '';
+      clearTimeout(audioRetryTimer);
+      audioRetryTimer = null;
       if (!audioEl.paused) {
         audioEl.pause();
       }
@@ -1891,6 +1894,7 @@
 
     document.getElementById('close-timeout').addEventListener('click', closeOverlay);
     document.getElementById('stage-next').addEventListener('click', () => {
+      stopAssistantAudio();
       closeOverlay();
       currentStage = 2;
       updateStageUI();
