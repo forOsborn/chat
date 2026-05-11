@@ -1066,6 +1066,106 @@ app.post('/api/chat/send', async (req, res) => {
   }
 });
 
+app.post('/api/chat/recover-send', async (req, res) => {
+  let session = null;
+  let chatId = '';
+  try {
+    const { localSessionId, content, stage } = req.body || {};
+    session = getSessionOrThrow(localSessionId);
+    const text = normalizeTranscript(content);
+
+    if (!text) {
+      return res.status(400).json({
+        ok: false,
+        error: 'content is required'
+      });
+    }
+
+    const currentStage = Number(stage || session.currentStage || 1) === 2 ? 2 : 1;
+    session.currentStage = currentStage;
+
+    const recovery = await startChat({
+      conversationId: session.conversationId,
+      userId: session.cozeUserId,
+      content: '继续当前训练'
+    });
+    await waitForChatAndGetAnswer({
+      conversationId: session.conversationId,
+      chatId: recovery.chatId
+    });
+
+    const outboundContent = buildPatientTurnPrompt({
+      stage: currentStage,
+      userText: compactCommand(text) === '开始训练' ? '继续当前训练' : text
+    });
+
+    const started = await startChat({
+      conversationId: session.conversationId,
+      userId: session.cozeUserId,
+      content: outboundContent
+    });
+    chatId = started.chatId;
+    session.activeChatId = chatId;
+    session.cancelRequestedChatId = '';
+    session.updatedAt = Date.now();
+
+    const result = await waitForChatAndGetAnswer({
+      conversationId: session.conversationId,
+      chatId
+    });
+
+    if (session.cancelRequestedChatId === chatId) {
+      return res.json({
+        ok: true,
+        canceled: true,
+        answer: '',
+        audioUrl: null
+      });
+    }
+
+    session.updatedAt = Date.now();
+    if (session.activeChatId === chatId) {
+      session.activeChatId = '';
+    }
+
+    let audioUrl = null;
+    let ttsError = null;
+    try {
+      audioUrl = await synthesizeSpeech(result.answer || '');
+    } catch (ttsErr) {
+      ttsError = getTtsDiagnosticError(ttsErr);
+      console.warn('/api/chat/recover-send tts warning:', ttsErr.message);
+    }
+
+    res.json({
+      ok: true,
+      answer: result.answer || '',
+      audioUrl,
+      ttsError
+    });
+  } catch (err) {
+    if (session && chatId && session.cancelRequestedChatId === chatId) {
+      if (session.activeChatId === chatId) {
+        session.activeChatId = '';
+      }
+      return res.json({
+        ok: true,
+        canceled: true,
+        answer: '',
+        audioUrl: null
+      });
+    }
+    if (session && chatId && session.activeChatId === chatId) {
+      session.activeChatId = '';
+    }
+    console.error('/api/chat/recover-send error:', err);
+    res.status(err.statusCode || 500).json({
+      ok: false,
+      error: err.message
+    });
+  }
+});
+
 app.post('/api/chat/cancel', async (req, res) => {
   try {
     const { localSessionId } = req.body || {};

@@ -540,6 +540,7 @@
     let activeRequestController = null;
     let activeRequestSeq = 0;
     let canceledRequestSeq = 0;
+    let awaitingRecoveryReinput = false;
     const ttsCache = new Map();
     const USE_BROWSER_SPEECH_RECOGNITION = true;
 
@@ -719,6 +720,12 @@
         .replace(/\\"/g, '"')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+    }
+
+    function isCozeTrainingRecoveryPrompt(text) {
+      const content = normalizeText(text);
+      return content.includes('我仅处理护理差错沟通训练相关内容')
+        && content.includes('继续当前训练');
     }
 
     function pushChatLog(role, content, stage) {
@@ -1114,9 +1121,10 @@
       updateStageUI();
     }
 
-    async function sendChatToBackend(text, signal) {
+    async function sendChatToBackend(text, signal, options = {}) {
+      const path = options.recover ? '/api/chat/recover-send' : '/api/chat/send';
       try {
-        return await postJson('/api/chat/send', {
+        return await postJson(path, {
           localSessionId,
           content: text,
           stage: currentStage || 1
@@ -1126,7 +1134,7 @@
         await createTrainingSession();
         resetLocalTrainingState();
         showToast('检测到后端已重启，已自动开启一轮新会话。');
-        return postJson('/api/chat/send', {
+        return postJson(path, {
           localSessionId,
           content: text,
           stage: currentStage || 1
@@ -1247,6 +1255,58 @@
       const text = normalizeText(content);
       if (!text || sending) return;
 
+      const useRecoverySend = awaitingRecoveryReinput && timerStarted;
+      if (useRecoverySend) {
+        awaitingRecoveryReinput = false;
+      }
+
+      if (useRecoverySend) {
+        currentStageAtSend = currentStage || 1;
+        appendMessage('user', text);
+        pushChatLog('user', text, currentStageAtSend);
+        inputEl.value = '';
+        autoResizeInput();
+        setSending(true);
+
+        const typing = appendTyping();
+        const requestSeq = activeRequestSeq + 1;
+        const controller = new AbortController();
+        activeRequestSeq = requestSeq;
+        activeRequestController = controller;
+        try {
+          const data = await sendChatToBackend(text, controller.signal, { recover: true });
+          if (canceledRequestSeq === requestSeq) return;
+          if (data.canceled) {
+            removeNode(typing);
+            appendMessage('assistant', '已停止本次回复，请重新输入或重新按住麦克风说话。');
+            return;
+          }
+
+          const answer = cleanForDisplayText(data.answer || '暂无回复');
+          removeNode(typing);
+          appendMessage('assistant', answer);
+          pushChatLog('assistant', answer, currentStageAtSend);
+          if (data.audioUrl) {
+            playAssistantAudio(data.audioUrl);
+          } else if (data.ttsError) {
+            showToast(`语音合成失败：${getTtsErrorMessage(data.ttsError)}`, 12000);
+            voiceStatusEl.textContent = '语音合成失败，请查看页面提示';
+          }
+        } catch (err) {
+          removeNode(typing);
+          appendMessage('assistant', err.name === 'AbortError'
+            ? '已停止本次回复，请重新输入或重新按住麦克风说话。'
+            : `请求失败：${err.message}`);
+        } finally {
+          if (activeRequestSeq === requestSeq) {
+            activeRequestController = null;
+            setSending(false);
+          }
+          inputEl.focus();
+        }
+        return;
+      }
+
       if (isStartTrainingMessage(text)) {
         await handleStartTrainingCommand(text);
         return;
@@ -1334,6 +1394,13 @@
 
         const answer = cleanForDisplayText(data.answer || '暂无回复');
         removeNode(typing);
+        if (isCozeTrainingRecoveryPrompt(answer)) {
+          const recoveryMessage = '抱歉，刚才没有识别清楚，请重新说一遍或重新输入。';
+          awaitingRecoveryReinput = true;
+          appendMessage('assistant', recoveryMessage);
+          synthesizeAndPlayText(recoveryMessage);
+          return;
+        }
         appendMessage('assistant', answer);
         pushChatLog('assistant', answer, currentStageAtSend);
         if (data.audioUrl) {
