@@ -758,9 +758,9 @@ async function sendOneOffMessage({ content, userId }) {
 }
 
 function buildScoringPrompt({ stageLabel, caseLabel, transcript, forceTimeUp = true }) {
-  const header = forceTimeUp
+  const endingContext = forceTimeUp
     ? '当前阶段时间已到，本轮对话已结束。'
-    : '本轮训练已由学员主动结束，请基于本轮对话生成反馈。';
+    : '学员已主动请求本轮反馈。';
 
   return [
     '你现在不是患者，也不是案例训练角色。',
@@ -774,6 +774,7 @@ function buildScoringPrompt({ stageLabel, caseLabel, transcript, forceTimeUp = t
     '4. 不要输出内部推理过程。',
     '5. 不要把原始对话大段复述成正文。',
     '6. 必须严格使用固定模板。',
+    `7. 结束原因仅作为内部判断依据：${endingContext} 不得把这句话原样输出到报告正文。`,
     '',
     '量表关注点仅限以下9个条目：',
     '（1）主动说明差错事实',
@@ -787,7 +788,6 @@ function buildScoringPrompt({ stageLabel, caseLabel, transcript, forceTimeUp = t
     '（9）系统改进导向',
     '',
     '输出时必须严格遵守以下模板，不得改变字段顺序：',
-    header,
     '【护理差错告知能力反馈报告】',
     `阶段：${stageLabel} | 案例：${caseLabel}`,
     '',

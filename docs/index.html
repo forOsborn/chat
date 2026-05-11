@@ -540,6 +540,7 @@
     let activeRequestController = null;
     let activeRequestSeq = 0;
     let canceledRequestSeq = 0;
+    const ttsCache = new Map();
     const USE_BROWSER_SPEECH_RECOGNITION = true;
 
     const STAGE_MINUTES = TEST_MODE ? TEST_STAGE_MINUTES : FORMAL_STAGE_MINUTES;
@@ -1033,11 +1034,22 @@
       return parts.join(' | ') || '语音合成失败';
     }
 
-    async function synthesizeAndPlayText(text) {
+    async function synthesizeTextAudio(text) {
       const content = normalizeText(text);
-      if (!content) return;
+      if (!content) return null;
+      if (!ttsCache.has(content)) {
+        ttsCache.set(
+          content,
+          postJson('/api/tts/synthesize', { text: content }, { retries: 1 })
+        );
+      }
+      return ttsCache.get(content);
+    }
+
+    async function synthesizeAndPlayText(text) {
       try {
-        const data = await postJson('/api/tts/synthesize', { text: content }, { retries: 1 });
+        const data = await synthesizeTextAudio(text);
+        if (!data) return;
         if (data.audioUrl) {
           playAssistantAudio(data.audioUrl);
         } else if (data.ttsError) {
@@ -1048,6 +1060,24 @@
         showToast(`语音合成请求失败：${err.message}`, 9000);
         voiceStatusEl.textContent = '语音合成请求失败';
       }
+    }
+
+    function preloadDeterministicAudio(stage, mode = 'repeat') {
+      synthesizeTextAudio(buildCaseIntro(stage, mode)).catch(() => {});
+    }
+
+    function hasCurrentStageRemaining(stage) {
+      if (stage === 1) return currentStage === 1 && totalSeconds > STAGE_SECONDS;
+      if (stage === 2) return currentStage === 2 && totalSeconds > 0;
+      return false;
+    }
+
+    function appendRemainingStageHint(answer, stage) {
+      if (!hasCurrentStageRemaining(stage)) return answer;
+      const currentCase = CASES[stage] || CASES[1];
+      const hint = `当前阶段尚未结束。若你希望继续训练，请输入“再来一次${currentCase.caseName}”或“开始${currentCase.caseName}”。`;
+      const content = normalizeText(answer);
+      return content.includes('当前阶段尚未结束') ? content : `${content}\n\n${hint}`;
     }
 
     function stopAssistantAudio() {
@@ -1193,8 +1223,9 @@
           transcript: getCurrentRoundTranscript(scoreStage)
         });
         removeNode(typing);
-        const answer = data.answer || '未获取到反馈文本';
+        const answer = appendRemainingStageHint(data.answer || '未获取到反馈文本', scoreStage);
         appendMessage('assistant', answer);
+        synthesizeAndPlayText(answer);
       } catch (err) {
         removeNode(typing);
         appendMessage('assistant', `评分失败：${err.message}`);
@@ -1354,6 +1385,8 @@
           feedback: data.answer || '未获取到反馈文本',
           showNext: true
         });
+        synthesizeAndPlayText(data.answer || '未获取到反馈文本');
+        preloadDeterministicAudio(2, 'timeup');
       } catch (err) {
         openOverlay({
           title: '第一阶段反馈失败',
@@ -1387,6 +1420,7 @@
           feedback: data.answer || '未获取到反馈文本',
           showNext: false
         });
+        synthesizeAndPlayText(data.answer || '未获取到反馈文本');
       } catch (err) {
         openOverlay({
           title: '最终反馈失败',
@@ -1790,6 +1824,7 @@
         const welcomeMessage = '您好！我是护理差错告知训练小助手。请问是否开始训练？如果是，请回复“开始训练”。';
         appendMessage('assistant', welcomeMessage);
         synthesizeAndPlayText(welcomeMessage);
+        preloadDeterministicAudio(1, 'start');
       } catch (err) {
         appendMessage('assistant', `创建新会话失败：${err.message}`);
       } finally {
