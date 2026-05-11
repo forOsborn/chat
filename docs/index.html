@@ -1208,6 +1208,10 @@
       ].some(item => compact === item || compact.includes(item));
     }
 
+    function isAnyRepeatAgainCommand(text) {
+      return getCompactText(text).includes('再来一次');
+    }
+
     async function handleManualScoreCommand(text) {
       const scoreStage = currentStage === 2 ? 2 : 1;
       appendMessage('user', text);
@@ -1246,6 +1250,18 @@
 
       if (timerStarted && isManualScoreRequest(text)) {
         await handleManualScoreCommand(text);
+        return;
+      }
+
+      if (timerStarted && hasCurrentStageRemaining(currentStage) && isAnyRepeatAgainCommand(text)) {
+        const expectedCase = currentStage === 2 ? 2 : 1;
+        appendMessage('user', text);
+        pushChatLog('user', text, expectedCase);
+        inputEl.value = '';
+        autoResizeInput();
+        beginNewRound(expectedCase);
+        appendDeterministicCase(expectedCase, 'repeat');
+        inputEl.focus();
         return;
       }
 
